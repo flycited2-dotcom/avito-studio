@@ -5,11 +5,11 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from avito_studio.catalog_service import CatalogRow
 
-_HEADERS = ["Бренд", "Серия", "Типоразмеры", "Остаток", "Карточка", "Публикуется"]
+_HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется"]
 
 
 class CatalogTableModel(QAbstractTableModel):
-    COL_BRAND, COL_SERIES, COL_SIZES, COL_STOCK, COL_CARD, COL_SELECTED = range(6)
+    COL_BRAND, COL_SERIES, COL_SIZES, COL_PRICE, COL_STOCK, COL_CARD, COL_SELECTED = range(7)
 
     def __init__(self, rows: list[CatalogRow], parent=None):
         super().__init__(parent)
@@ -48,6 +48,7 @@ class CatalogTableModel(QAbstractTableModel):
             self.COL_BRAND: row.brand,
             self.COL_SERIES: row.series,
             self.COL_SIZES: row.sizes,
+            self.COL_PRICE: row.price_range,
             self.COL_STOCK: str(row.stock_total),
             self.COL_CARD: "✓" if row.has_card else "—",
         }.get(col)

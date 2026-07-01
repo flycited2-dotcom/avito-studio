@@ -4,9 +4,11 @@ from avito_studio.catalog_table_model import CatalogTableModel
 
 ROWS = [
     CatalogRow(key="a", source="breeze", brand="Funai", series="Sensei", sizes="7/9 тыс. BTU",
-              stock_total=5, has_card=True, forced=False, selected=True),
+              stock_total=5, has_card=True, forced=False, selected=True,
+              representative_nc="НС-1", price_range="25990–27990 ₽"),
     CatalogRow(key="b", source="daichi", brand="Midea", series="Изи", sizes="12 тыс. BTU",
-              stock_total=1, has_card=False, forced=False, selected=False),
+              stock_total=1, has_card=False, forced=False, selected=False,
+              representative_nc="НС-3", price_range="19990 ₽"),
 ]
 
 
@@ -31,3 +33,9 @@ def test_checkbox_column_reflects_and_toggles_selected():
     model.setData(idx, Qt.Checked, Qt.CheckStateRole)
     assert model.rows[1].selected is True
     assert model.dirty_keys == {"b"}
+
+
+def test_price_column_shows_price_range():
+    model = CatalogTableModel(ROWS)
+    idx = model.index(0, model.COL_PRICE)
+    assert model.data(idx, Qt.DisplayRole) == "25990–27990 ₽"
