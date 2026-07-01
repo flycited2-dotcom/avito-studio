@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit,
                                QStatusBar, QWidget, QVBoxLayout)
 from avito_studio.local_config import LocalConfig
 from avito_studio.catalog_table_model import CatalogTableModel
-from avito_studio.workers import RefreshWorker, DeployWorker, run_in_thread
+from avito_studio.workers import RefreshWorker, DeployWorker, AvitoStatusWorker, run_in_thread
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction("Обновить", self.refresh)
         toolbar.addAction("Опубликовать изменения", self.publish)
         toolbar.addAction("Добавить товар под заказ", self._open_add_forced_dialog)
+        toolbar.addAction("Обновить статус Avito", self._refresh_avito_status)
         self.addToolBar(toolbar)
 
         central = QWidget()
@@ -99,3 +100,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 "Товар добавлен локально. «Обновить» покажет его после «Опубликовать» "
                 "(сервер должен увидеть новый force_include).", 8000)
+
+    def _refresh_avito_status(self) -> None:
+        self.statusBar().showMessage("Запрашиваю статус на Avito…")
+        worker = AvitoStatusWorker(self.bridge_root, list(self.model.rows))
+        self._threads.append(run_in_thread(worker, self._on_avito_status_ok, self._on_error))
+
+    def _on_avito_status_ok(self, statuses: dict) -> None:
+        for row in self.model.rows:
+            st = statuses.get(row.key)
+            row.avito_status = st.avito_status if st else None
+        top_left = self.model.index(0, 0)
+        bottom_right = self.model.index(self.model.rowCount() - 1, self.model.columnCount() - 1)
+        self.model.dataChanged.emit(top_left, bottom_right)
+        matched = sum(1 for s in statuses.values() if s.avito_status)
+        self.statusBar().showMessage(f"Статус получен: {matched} из {len(statuses)} серий", 8000)

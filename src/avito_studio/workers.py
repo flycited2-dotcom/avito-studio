@@ -60,6 +60,25 @@ class GenerateCardWorker(QObject):
         self.finished.emit(out)
 
 
+class AvitoStatusWorker(QObject):
+    finished = Signal(dict)   # {key: RowAvitoStatus}
+    failed = Signal(str)
+
+    def __init__(self, bridge_root, rows):
+        super().__init__()
+        self.bridge_root = bridge_root
+        self.rows = rows
+
+    def run(self):
+        from avito_studio.avito_status import fetch_statuses
+        try:
+            statuses = fetch_statuses(self.bridge_root, self.rows)
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished.emit(statuses)
+
+
 def run_in_thread(worker: QObject, on_finished, on_failed) -> QThread:
     """Поднимает worker.run() в QThread, коннектит сигналы, возвращает thread
     (вызывающий обязан держать ссылку, иначе Python/Qt соберёт поток раньше времени).

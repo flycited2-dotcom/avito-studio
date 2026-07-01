@@ -39,3 +39,9 @@ def test_price_column_shows_price_range():
     model = CatalogTableModel(ROWS)
     idx = model.index(0, model.COL_PRICE)
     assert model.data(idx, Qt.DisplayRole) == "25990–27990 ₽"
+
+
+def test_avito_status_column_shows_dash_by_default():
+    model = CatalogTableModel(ROWS)
+    idx = model.index(0, model.COL_AVITO_STATUS)
+    assert model.data(idx, Qt.DisplayRole) == "—"

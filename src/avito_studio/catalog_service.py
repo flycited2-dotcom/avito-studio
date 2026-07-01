@@ -22,6 +22,7 @@ class CatalogRow:
     selected: bool
     representative_nc: str = ""
     price_range: str = "—"
+    avito_status: str | None = None
 
 
 def _sizes_label(members: list[dict]) -> str:
