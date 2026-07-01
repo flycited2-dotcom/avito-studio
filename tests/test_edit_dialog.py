@@ -144,6 +144,21 @@ def test_save_writes_description(qtbot, tmp_path):
     assert description_store.get_description(root, row.key) == "Новое описание серии"
 
 
+def test_save_without_touching_empty_description_does_not_create_manifest_entry(qtbot, tmp_path):
+    """Раньше save() ВСЕГДА писал содержимое поля описания — открыл карточку (посмотреть фото,
+    сгенерить карточку) и нажал «Сохранить», ничего не тронув → создавался пустой файл-заглушка
+    и запись в manifest.json, даже когда автогенерация описания уже работала и трогать её не надо."""
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row()
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.save()
+    import json
+    manifest = json.loads((root / "avito-descriptions" / "manifest.json").read_text(encoding="utf-8"))
+    assert row.key not in manifest
+
+
 def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     root = _bridge_root(tmp_path)
     local_cfg = LocalConfig(root / "config" / "config.yaml")
@@ -158,6 +173,41 @@ def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     assert len(ssh.put_calls) == 1
     reloaded = LocalConfig(root / "config" / "config.yaml")
     assert reloaded.get_manual_photo("НС-2") == "https://splithome.ru/static/manual-photos/НС-2.jpg"
+
+
+def test_utp_field_empty_by_default_and_unchanged_does_not_create_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row()
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.utp_edit.toPlainText() == ""
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_card_brief("НС-2") is None
+
+
+def test_utp_field_changed_saves_card_brief_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row()
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.utp_edit.setPlainText("Тихий, мощный, Wi-Fi")
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_card_brief("НС-2") == "Тихий, мощный, Wi-Fi"
+
+
+def test_utp_field_prefilled_with_existing_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_card_brief("НС-2", "Тихий, мощный")
+    local_cfg.save()
+    row = _row()
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.utp_edit.toPlainText() == "Тихий, мощный"
 
 
 def test_generate_card_button_disabled_when_card_exists(qtbot, tmp_path):

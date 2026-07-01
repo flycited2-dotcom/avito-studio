@@ -69,9 +69,23 @@ class EditSeriesDialog(QDialog):
 
         layout.addLayout(form)
 
-        layout.addWidget(QLabel("Описание:"))
+        layout.addWidget(QLabel("УТП/характеристики для карточки (необязательно):"))
+        self.utp_edit = QTextEdit()
+        self.utp_edit.setPlaceholderText(
+            "Оставьте пустым — фотоагент возьмёт стандартный текст (бренд/тип/размер/инвертор). "
+            "Заполните, если хотите подсветить что-то особенное для этого товара.")
+        self.utp_edit.setMaximumHeight(80)
+        self.utp_edit.setPlainText(local_cfg.get_card_brief(row.representative_nc) or "")
+        self._initial_utp_shown = self.utp_edit.toPlainText()
+        layout.addWidget(self.utp_edit)
+
+        layout.addWidget(QLabel("Описание для объявления Avito (необязательно):"))
         self.description_edit = QTextEdit()
+        self.description_edit.setPlaceholderText(
+            "Оставьте пустым — описание сгенерируется автоматически (тип/размер/площадь/выгоды). "
+            "Заполните, только если хотите написать текст сами.")
         self.description_edit.setPlainText(description_store.get_description(self.bridge_root, row.key))
+        self._initial_description_shown = self.description_edit.toPlainText()
         layout.addWidget(self.description_edit)
 
         buttons = QHBoxLayout()
@@ -118,6 +132,13 @@ class EditSeriesDialog(QDialog):
             from avito_studio.photo_upload import upload_manual_photo
             url = upload_manual_photo(self.ssh, self._new_photo_path, self.row.representative_nc)
             self.local_cfg.set_manual_photo(self.row.representative_nc, url)
+        if self.utp_edit.toPlainText() != self._initial_utp_shown:
+            # так же, как с ценой — пишем override ТОЛЬКО при реальном изменении, иначе открытие
+            # и сохранение диалога без правки УТП засоряло бы config.yaml пустыми записями.
+            self.local_cfg.set_card_brief(self.row.representative_nc, self.utp_edit.toPlainText())
         self.local_cfg.save()
-        description_store.save_description(self.bridge_root, self.row.key,
-                                           self.description_edit.toPlainText())
+        if self.description_edit.toPlainText() != self._initial_description_shown:
+            # аналогично: не плодим пустые файлы-заглушки в avito-descriptions/ на каждое
+            # открытие+сохранение карточки без правки описания.
+            description_store.save_description(self.bridge_root, self.row.key,
+                                               self.description_edit.toPlainText())
