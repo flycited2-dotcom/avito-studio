@@ -3,7 +3,7 @@
 в LocalConfig (force_include) — «Опубликовать» в главном окне уже разберётся с деплоем."""
 from __future__ import annotations
 from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
-                               QVBoxLayout, QHBoxLayout, QLabel)
+                               QVBoxLayout, QHBoxLayout, QLabel, QMessageBox)
 from avito_studio.local_config import LocalConfig
 
 
@@ -43,7 +43,7 @@ class AddForcedProductDialog(QDialog):
         buttons = QHBoxLayout()
         self.save_btn = QPushButton("Добавить")
         self.save_btn.setEnabled(False)
-        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.clicked.connect(self._validate_and_accept)
         cancel_btn = QPushButton("Отмена")
         cancel_btn.clicked.connect(self.reject)
         buttons.addWidget(self.save_btn)
@@ -52,6 +52,16 @@ class AddForcedProductDialog(QDialog):
 
     def _update_save_enabled(self, text: str) -> None:
         self.save_btn.setEnabled(bool(text.strip()))
+
+    def _validate_and_accept(self) -> None:
+        if self.price_field.value() == 0:
+            reply = QMessageBox.question(
+                self, "Цена не указана",
+                "Цена равна 0 ₽. Всё равно добавить товар с нулевой ценой?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        self.accept()
 
     def save(self) -> None:
         """Вызывается ПОСЛЕ exec()==Accepted (см. main_window._open_add_forced_dialog)."""
