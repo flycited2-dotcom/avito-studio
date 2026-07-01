@@ -4,10 +4,15 @@
 from __future__ import annotations
 from pathlib import Path
 from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
 
 _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.width = 4096   # не переносить длинные строки при сохранении
+# Без этого ruamel при ЛЮБОМ save() сбрасывает отступ последовательностей под ключом
+# (напр. "    - x" → "- x"), давая огромный шумный diff даже без реальных правок.
+# offset=2 — стиль, уже используемый в config.yaml ("catalog:\n  selected_series:\n    - x").
+_yaml.indent(mapping=2, sequence=4, offset=2)
 
 
 class LocalConfig:
@@ -24,7 +29,7 @@ class LocalConfig:
     def set_selected(self, key: str, selected: bool) -> None:
         seq = self.data["catalog"]["selected_series"]
         if selected and key not in seq:
-            seq.append(key)
+            seq.append(DQ(key))    # в кавычках — как все остальные записи в файле
         elif not selected and key in seq:
             seq.remove(key)
 

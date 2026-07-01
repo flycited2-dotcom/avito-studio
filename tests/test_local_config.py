@@ -53,3 +53,16 @@ def test_set_selected_false_removes_and_is_idempotent(tmp_path):
 def test_selected_series_lists_all(tmp_path):
     cfg = LocalConfig(_write(tmp_path))
     assert set(cfg.selected_series()) == {"breeze|funai|sensei 2.0", "daichi|midea|изи"}
+
+
+def test_save_preserves_sequence_indentation_style(tmp_path):
+    """Без явного yaml.indent(...) ruamel сбрасывает отступ списка при КАЖДОМ save() —
+    даёт огромный шумный diff, даже когда правишь одну строку. Список должен остаться
+    с отступом в 4 пробела (стиль, уже используемый в реальном config.yaml)."""
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.set_selected("new|entry|x", True)
+    cfg.save()
+    text = path.read_text(encoding="utf-8")
+    assert '    - "breeze|funai|sensei 2.0"' in text
+    assert '    - "new|entry|x"' in text
