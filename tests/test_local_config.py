@@ -1,0 +1,55 @@
+from avito_studio.local_config import LocalConfig
+
+FIXTURE = """\
+# комментарий, который должен выжить
+cities:
+  - { id: "simferopol", name: "Симферополь", avito_location: "Крым" }
+pricing:
+  default_markup_pct: 5
+catalog:
+  force_include:
+    "НС-1": { price: 18990, series: "ACE-07" }
+  manual_photos:
+    "НС-2": "https://x/2.jpg"
+  selected_series:
+    - "breeze|funai|sensei 2.0"
+    - "daichi|midea|изи"
+"""
+
+
+def _write(tmp_path):
+    p = tmp_path / "config.yaml"
+    p.write_text(FIXTURE, encoding="utf-8")
+    return p
+
+
+def test_is_selected_reflects_yaml(tmp_path):
+    cfg = LocalConfig(_write(tmp_path))
+    assert cfg.is_selected("breeze|funai|sensei 2.0") is True
+    assert cfg.is_selected("nope|not|there") is False
+
+
+def test_set_selected_true_adds_and_saves(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.set_selected("rusklimat|ballu|tessey dc", True)
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.is_selected("rusklimat|ballu|tessey dc") is True
+    assert "комментарий, который должен выжить" in path.read_text(encoding="utf-8")
+
+
+def test_set_selected_false_removes_and_is_idempotent(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.set_selected("daichi|midea|изи", False)
+    cfg.set_selected("daichi|midea|изи", False)   # повторный вызов не должен падать
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.is_selected("daichi|midea|изи") is False
+    assert reloaded.is_selected("breeze|funai|sensei 2.0") is True   # остальное не тронуто
+
+
+def test_selected_series_lists_all(tmp_path):
+    cfg = LocalConfig(_write(tmp_path))
+    assert set(cfg.selected_series()) == {"breeze|funai|sensei 2.0", "daichi|midea|изи"}
