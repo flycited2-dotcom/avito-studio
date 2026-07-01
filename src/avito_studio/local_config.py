@@ -4,6 +4,7 @@
 from __future__ import annotations
 from pathlib import Path
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
 
 _yaml = YAML()
@@ -39,6 +40,15 @@ class LocalConfig:
 
     def set_force_price(self, nc_code: str, price: int) -> None:
         self.data["catalog"]["force_include"][nc_code]["price"] = price
+
+    def add_force_include(self, nc_code: str, price: int, series: str | None = None) -> None:
+        # CommentedMap + set_flow_style() — иначе новая запись рендерится многострочным блоком,
+        # а не inline "{ price: ..., series: ... }" как все соседние записи (см. Task 1 Step 5 плана).
+        entry = CommentedMap({"price": price})
+        if series:
+            entry["series"] = DQ(series)
+        entry.fa.set_flow_style()
+        self.data["catalog"]["force_include"][DQ(nc_code)] = entry
 
     def get_manual_photo(self, nc_code: str) -> str | None:
         return self.data.get("catalog", {}).get("manual_photos", {}).get(nc_code)

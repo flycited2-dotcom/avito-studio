@@ -93,3 +93,24 @@ def test_manual_photo_get_set_roundtrip(tmp_path):
     reloaded = LocalConfig(path)
     assert reloaded.get_manual_photo("НС-9") == "https://splithome.ru/static/manual-photos/НС-9.jpg"
     assert reloaded.get_manual_photo("НС-2") == "https://x/2.jpg"   # старая запись не потерялась
+
+
+def test_add_force_include_new_entry_with_series(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.add_force_include("НС-777", 15990, series="Тестовая серия")
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_force_price("НС-777") == 15990
+    text = path.read_text(encoding="utf-8")
+    assert "НС-777" in text and "Тестовая серия" in text
+    assert "НС-1" in text and "ACE-07" in text   # старая запись не потерялась
+
+
+def test_add_force_include_without_series(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.add_force_include("НС-778", 9990)
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_force_price("НС-778") == 9990
