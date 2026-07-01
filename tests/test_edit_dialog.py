@@ -121,3 +121,4 @@ def test_generate_card_button_triggers_ssh_call_and_reports_result(qtbot, tmp_pa
     with qtbot.waitSignal(dlg.card_generation_done, timeout=3000):
         dlg.generate_card_btn.click()
     assert "submitted=1" in dlg.card_status_label.text()
+    assert dlg.generate_card_btn.isEnabled() is True   # можно повторить (напр. после смены лимита)

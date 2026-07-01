@@ -95,6 +95,7 @@ class EditSeriesDialog(QDialog):
 
     def _on_card_generated(self, output: str) -> None:
         self.card_status_label.setText(output.strip())
+        self.generate_card_btn.setEnabled(True)   # можно повторить (напр. когда лимит подняли)
         self.card_generation_done.emit()
 
     def _on_card_failed(self, message: str) -> None:
