@@ -15,8 +15,11 @@ class SshClient:
                 "-o", "ConnectTimeout=45", self.host]
 
     def run(self, remote_cmd: str) -> str:
+        # encoding явный: без него subprocess берёт локаль Windows (cp1251), а сервер отдаёт
+        # UTF-8 с кириллицей (артикулы/бренды) — фоновый ридер падает с UnicodeDecodeError,
+        # и subprocess.run молча возвращает stdout=None вместо исключения.
         result = subprocess.run(self._base_cmd() + [remote_cmd],
-                                capture_output=True, text=True, check=True)
+                                capture_output=True, text=True, encoding="utf-8", check=True)
         return result.stdout
 
     def put(self, remote_path: str, data: bytes) -> None:

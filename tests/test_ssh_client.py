@@ -17,6 +17,7 @@ def test_run_builds_correct_ssh_command(monkeypatch):
     assert captured["cmd"] == ["ssh", "-i", "/k", "-o", "BatchMode=yes",
                                "-o", "ConnectTimeout=45", "root@1.2.3.4", "echo hi"]
     assert captured["kwargs"]["check"] is True
+    assert captured["kwargs"]["encoding"] == "utf-8"   # иначе Windows берёт cp1251, кириллица ломает вывод
 
 
 def test_put_pipes_data_via_stdin(monkeypatch):
