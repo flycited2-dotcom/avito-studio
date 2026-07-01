@@ -1,9 +1,9 @@
-"""Форма «товар под заказ»: артикул (должен существовать как продукт у поставщика в БД oasis,
-просто без остатка на складе) + цена + опционально имя серии. Пишет запись в LocalConfig
-(force_include) — «Опубликовать» в главном окне уже разберётся с деплоем."""
+"""Форма ручного добавления товара в выгрузку Avito: артикул поставщика (должен существовать как
+продукт в БД oasis, просто без остатка на складе) + цена + опционально имя серии. Пишет запись
+в LocalConfig (force_include) — «Опубликовать» в главном окне уже разберётся с деплоем."""
 from __future__ import annotations
 from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
-                               QVBoxLayout, QHBoxLayout)
+                               QVBoxLayout, QHBoxLayout, QLabel)
 from avito_studio.local_config import LocalConfig
 
 
@@ -11,15 +11,23 @@ class AddForcedProductDialog(QDialog):
     def __init__(self, local_cfg: LocalConfig, parent=None):
         super().__init__(parent)
         self.local_cfg = local_cfg
-        self.setWindowTitle("Добавить товар под заказ")
+        self.setWindowTitle("Добавить товар вручную")
+        self.resize(480, 260)
 
         layout = QVBoxLayout(self)
+
+        hint = QLabel(
+            "Артикул поставщика (nc_code) — в основной таблице его не видно (там только бренд/серия).\n"
+            "Уточните артикул в Excel-каталоге поставщика или у товароведа перед вводом.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
         form = QFormLayout()
 
         self.nc_field = QLineEdit()
         self.nc_field.setPlaceholderText("напр. НС-1690797")
         self.nc_field.textChanged.connect(self._update_save_enabled)
-        form.addRow("Артикул:", self.nc_field)
+        form.addRow("Артикул поставщика:", self.nc_field)
 
         self.price_field = QSpinBox()
         self.price_field.setRange(0, 10_000_000)

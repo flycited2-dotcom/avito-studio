@@ -44,7 +44,7 @@ class EditSeriesDialog(QDialog):
             self.price_field.setValue(_leading_price(row.price_range) or 0)
             self.price_field.setEnabled(False)
             self.price_field.setToolTip(
-                "Авторасчёт (опт + наценка) — редактируется только для товаров «под заказ»")
+                "Авторасчёт (опт + наценка) — редактируется только для товаров, добавленных вручную")
         form.addRow("Цена:", self.price_field)
 
         photo_row = QHBoxLayout()

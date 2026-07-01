@@ -36,7 +36,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar()
         toolbar.addAction("Обновить", self.refresh)
         toolbar.addAction("Опубликовать изменения", self.publish)
-        toolbar.addAction("Добавить товар под заказ", self._open_add_forced_dialog)
+        toolbar.addAction("Добавить товар вручную", self._open_add_forced_dialog)
         toolbar.addAction("Обновить статус Avito", self._refresh_avito_status)
         self.addToolBar(toolbar)
 
