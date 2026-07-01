@@ -114,3 +114,30 @@ def test_add_force_include_without_series(tmp_path):
     cfg.save()
     reloaded = LocalConfig(path)
     assert reloaded.get_force_price("НС-778") == 9990
+
+
+# Реальный config.yaml: комментарий про manual_photos стоит СРАЗУ после последней записи
+# force_include без пустой строки. ruamel склеивает такой комментарий с последним ключом —
+# добавление в конец мапы (обычным присваиванием) "раздвигает" склейку и комментарий уезжает
+# ВНУТРЬ force_include (перед новой записью, хотя семантически он про manual_photos).
+FIXTURE_TRAILING_COMMENT = """\
+catalog:
+  force_include:
+    "A": { price: 1, series: "s1" }   # comment A
+    "B": { price: 2, series: "s2" }   # comment B
+  # this comment belongs to manual_photos
+  manual_photos:
+    "X": "url"
+"""
+
+
+def test_add_force_include_does_not_disturb_trailing_comment_of_next_section(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_TRAILING_COMMENT, encoding="utf-8")
+    cfg = LocalConfig(path)
+    cfg.add_force_include("C", 3, series="s3")
+    cfg.save()
+    text = path.read_text(encoding="utf-8")
+    # комментарий должен остаться НЕПОСРЕДСТВЕННО перед "manual_photos:", а не между
+    # force_include-записями
+    assert "  # this comment belongs to manual_photos\n  manual_photos:" in text

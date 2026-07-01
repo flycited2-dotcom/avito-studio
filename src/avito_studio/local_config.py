@@ -48,7 +48,11 @@ class LocalConfig:
         if series:
             entry["series"] = DQ(series)
         entry.fa.set_flow_style()
-        self.data["catalog"]["force_include"][DQ(nc_code)] = entry
+        # insert(0, ...) — а не обычное присваивание в конец: комментарий про manual_photos
+        # в реальном config.yaml физически приклеен (склеен ruamel) к ПОСЛЕДНЕМУ существующему
+        # ключу force_include; добавление в конец раздвигает эту склейку и комментарий "уезжает"
+        # внутрь force_include. Вставка в начало не трогает последний ключ и его комментарий.
+        self.data["catalog"]["force_include"].insert(0, DQ(nc_code), entry)
 
     def get_manual_photo(self, nc_code: str) -> str | None:
         return self.data.get("catalog", {}).get("manual_photos", {}).get(nc_code)
