@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar()
         toolbar.addAction("Обновить", self.refresh)
         toolbar.addAction("Опубликовать изменения", self.publish)
+        toolbar.addAction("Добавить товар под заказ", self._open_add_forced_dialog)
         self.addToolBar(toolbar)
 
         central = QWidget()
@@ -89,3 +90,12 @@ class MainWindow(QMainWindow):
             bottom_right = self.model.index(source_index.row(), self.model.columnCount() - 1)
             self.model.dataChanged.emit(top_left, bottom_right)
             self.statusBar().showMessage("Серия сохранена локально (для сервера — «Опубликовать»)", 5000)
+
+    def _open_add_forced_dialog(self) -> None:
+        from avito_studio.add_forced_dialog import AddForcedProductDialog
+        dlg = AddForcedProductDialog(self.local_cfg, parent=self)
+        if dlg.exec():
+            dlg.save()
+            self.statusBar().showMessage(
+                "Товар добавлен локально. «Обновить» покажет его после «Опубликовать» "
+                "(сервер должен увидеть новый force_include).", 8000)
