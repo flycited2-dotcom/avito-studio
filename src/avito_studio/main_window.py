@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit,
-                               QStatusBar, QWidget, QVBoxLayout)
+                               QStatusBar, QWidget, QVBoxLayout, QMessageBox)
 from avito_studio.local_config import LocalConfig
 from avito_studio.catalog_table_model import CatalogTableModel
 from avito_studio.workers import RefreshWorker, DeployWorker, AvitoStatusWorker, run_in_thread
@@ -68,6 +68,13 @@ class MainWindow(QMainWindow):
         self.model.dirty_keys.clear()
 
     def publish(self):
+        reply = QMessageBox.question(
+            self, "Опубликовать изменения?",
+            "Локальные изменения (публикация серий, цены, фото, описания) уйдут на сервер и "
+            "попадут в реальный фид Avito. Продолжить?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            return
         self.save_local_selection()
         self.statusBar().showMessage("Публикация на сервер (может занять до минуты)…")
         worker = DeployWorker(self.bridge_root, self.ssh)
@@ -85,21 +92,36 @@ class MainWindow(QMainWindow):
         source_index = self.proxy.mapToSource(proxy_index)
         row = self.model.rows[source_index.row()]
         dlg = EditSeriesDialog(row, self.bridge_root, self.local_cfg, self.ssh, parent=self)
-        if dlg.exec():
+        if not dlg.exec():
+            return
+        try:
             dlg.save()
-            top_left = self.model.index(source_index.row(), 0)
-            bottom_right = self.model.index(source_index.row(), self.model.columnCount() - 1)
-            self.model.dataChanged.emit(top_left, bottom_right)
-            self.statusBar().showMessage("Серия сохранена локально (для сервера — «Опубликовать»)", 5000)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось сохранить изменения: {e}")
+            return
+        top_left = self.model.index(source_index.row(), 0)
+        bottom_right = self.model.index(source_index.row(), self.model.columnCount() - 1)
+        self.model.dataChanged.emit(top_left, bottom_right)
+        self.statusBar().showMessage("Серия сохранена локально (для сервера — «Опубликовать»)", 5000)
+        QMessageBox.information(self, "Сохранено",
+                                "Серия сохранена локально.\nЧтобы изменения ушли на Avito — «Опубликовать изменения».")
 
     def _open_add_forced_dialog(self) -> None:
         from avito_studio.add_forced_dialog import AddForcedProductDialog
         dlg = AddForcedProductDialog(self.local_cfg, parent=self)
-        if dlg.exec():
+        if not dlg.exec():
+            return
+        try:
             dlg.save()
-            self.statusBar().showMessage(
-                "Товар добавлен локально. «Обновить» покажет его после «Опубликовать» "
-                "(сервер должен увидеть новый force_include).", 8000)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось добавить товар: {e}")
+            return
+        self.statusBar().showMessage(
+            "Товар добавлен локально. «Обновить» покажет его после «Опубликовать» "
+            "(сервер должен увидеть новый force_include).", 8000)
+        QMessageBox.information(self, "Добавлено",
+                                "Товар добавлен локально.\nНажмите «Обновить», затем «Опубликовать изменения», "
+                                "чтобы он появился на Avito.")
 
     def _refresh_avito_status(self) -> None:
         self.statusBar().showMessage("Запрашиваю статус на Avito…")
