@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+src/avito_studio/__init__.py
+src/avito_studio.egg-info/PKG-INFO
+src/avito_studio.egg-info/SOURCES.txt
+src/avito_studio.egg-info/dependency_links.txt
+src/avito_studio.egg-info/requires.txt
+src/avito_studio.egg-info/top_level.txt
