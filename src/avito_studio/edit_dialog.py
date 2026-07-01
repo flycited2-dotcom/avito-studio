@@ -4,11 +4,13 @@ avito-descriptions/) — на сервер они уйдут отдельным 
 from __future__ import annotations
 import re
 from pathlib import Path
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTextEdit, QPushButton,
                                QFileDialog, QLabel, QHBoxLayout, QSpinBox)
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.local_config import LocalConfig
 from avito_studio import description_store
+from avito_studio.workers import GenerateCardWorker, run_in_thread
 
 
 def _leading_price(price_range: str) -> int | None:
@@ -19,6 +21,8 @@ def _leading_price(price_range: str) -> int | None:
 
 
 class EditSeriesDialog(QDialog):
+    card_generation_done = Signal()
+
     def __init__(self, row: CatalogRow, bridge_root: Path, local_cfg: LocalConfig, ssh, parent=None):
         super().__init__(parent)
         self.row = row
@@ -50,6 +54,17 @@ class EditSeriesDialog(QDialog):
         photo_row.addWidget(self.photo_label)
         photo_row.addWidget(photo_btn)
         form.addRow("Фото:", photo_row)
+
+        card_row = QHBoxLayout()
+        self.generate_card_btn = QPushButton("Сгенерировать карточку")
+        self.generate_card_btn.setEnabled(not row.has_card)
+        self.generate_card_btn.clicked.connect(self._generate_card)
+        self.card_status_label = QLabel("Карточка есть" if row.has_card else "Карточки нет")
+        card_row.addWidget(self.generate_card_btn)
+        card_row.addWidget(self.card_status_label)
+        form.addRow("Карточка:", card_row)
+        self._threads = []
+
         layout.addLayout(form)
 
         layout.addWidget(QLabel("Описание:"))
@@ -71,6 +86,20 @@ class EditSeriesDialog(QDialog):
         if path:
             self._new_photo_path = Path(path)
             self.photo_label.setText(path)
+
+    def _generate_card(self) -> None:
+        self.generate_card_btn.setEnabled(False)
+        self.card_status_label.setText("Ставлю задачу…")
+        worker = GenerateCardWorker(self.ssh, self.row.key)
+        self._threads.append(run_in_thread(worker, self._on_card_generated, self._on_card_failed))
+
+    def _on_card_generated(self, output: str) -> None:
+        self.card_status_label.setText(output.strip())
+        self.card_generation_done.emit()
+
+    def _on_card_failed(self, message: str) -> None:
+        self.card_status_label.setText(f"Ошибка: {message}")
+        self.generate_card_btn.setEnabled(True)
 
     def save(self) -> None:
         """Применяет правки. Вызывается ПОСЛЕ exec()==Accepted (см. main_window._open_edit_dialog).

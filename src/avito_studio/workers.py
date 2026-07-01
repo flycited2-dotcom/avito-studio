@@ -41,6 +41,25 @@ class DeployWorker(QObject):
         self.finished.emit(out)
 
 
+class GenerateCardWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, ssh, series_key: str):
+        super().__init__()
+        self.ssh = ssh
+        self.series_key = series_key
+
+    def run(self):
+        from avito_studio.card_generation import generate_card
+        try:
+            out = generate_card(self.ssh, self.series_key)
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished.emit(out)
+
+
 def run_in_thread(worker: QObject, on_finished, on_failed) -> QThread:
     """Поднимает worker.run() в QThread, коннектит сигналы, возвращает thread
     (вызывающий обязан держать ссылку, иначе Python/Qt соберёт поток раньше времени).

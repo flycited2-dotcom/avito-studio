@@ -26,10 +26,11 @@ class FakeSsh:
     def __init__(self):
         self.run_calls = []
         self.put_calls = []
+        self.run_result = ""
 
     def run(self, cmd):
         self.run_calls.append(cmd)
-        return ""
+        return self.run_result
 
     def put(self, remote_path, data):
         self.put_calls.append((remote_path, data))
@@ -98,3 +99,25 @@ def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     assert len(ssh.put_calls) == 1
     reloaded = LocalConfig(root / "config" / "config.yaml")
     assert reloaded.get_manual_photo("НС-2") == "https://splithome.ru/static/manual-photos/НС-2.jpg"
+
+
+def test_generate_card_button_disabled_when_card_exists(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    dlg = EditSeriesDialog(_row(has_card=True), root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.generate_card_btn.isEnabled() is False
+
+
+def test_generate_card_button_triggers_ssh_call_and_reports_result(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    ssh = FakeSsh()
+    ssh.run_result = "cards: series=1 submitted=1 published=0\n"
+    row = _row(has_card=False)
+    dlg = EditSeriesDialog(row, root, local_cfg, ssh)
+    qtbot.addWidget(dlg)
+    assert dlg.generate_card_btn.isEnabled() is True
+    with qtbot.waitSignal(dlg.card_generation_done, timeout=3000):
+        dlg.generate_card_btn.click()
+    assert "submitted=1" in dlg.card_status_label.text()
