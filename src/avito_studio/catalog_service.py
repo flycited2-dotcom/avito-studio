@@ -20,6 +20,8 @@ class CatalogRow:
     has_card: bool
     forced: bool
     selected: bool
+    representative_nc: str = ""
+    price_range: str = "—"
 
 
 def _sizes_label(members: list[dict]) -> str:
@@ -27,6 +29,15 @@ def _sizes_label(members: list[dict]) -> str:
     if not sizes:
         return "—"
     return "/".join(str(int(s)) for s in sizes) + " тыс. BTU"
+
+
+def _price_range_label(members: list[dict]) -> str:
+    prices = sorted({m["price"] for m in members if m.get("price_ok") and m.get("price") is not None})
+    if not prices:
+        return "—"
+    if len(prices) == 1:
+        return f"{prices[0]} ₽"
+    return f"{prices[0]}–{prices[-1]} ₽"
 
 
 def fetch_catalog(ssh, local_cfg: LocalConfig) -> list[CatalogRow]:
@@ -38,5 +49,7 @@ def fetch_catalog(ssh, local_cfg: LocalConfig) -> list[CatalogRow]:
             key=g["key"], source=g["source"], brand=g["brand"], series=g["series"],
             sizes=_sizes_label(g["members"]), stock_total=g["stock_total"],
             has_card=g["has_card"], forced=g["forced"],
-            selected=local_cfg.is_selected(g["key"])))
+            selected=local_cfg.is_selected(g["key"]),
+            representative_nc=g["members"][0]["nc_code"],
+            price_range=_price_range_label(g["members"])))
     return rows

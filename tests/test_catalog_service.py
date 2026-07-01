@@ -49,3 +49,6 @@ def test_fetch_catalog_merges_remote_json_with_local_selection(tmp_path):
     assert izy.selected is False
     assert len(ssh.calls) == 1
     assert "catalog_export" in ssh.calls[0]
+    assert sensei.representative_nc == "НС-1"          # первый член = репрезентативный (младший размер)
+    assert sensei.price_range == "25990–27990 ₽"
+    assert izy.price_range == "19990 ₽"
