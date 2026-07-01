@@ -58,20 +58,79 @@ def test_forced_row_price_field_editable_and_saved(qtbot, tmp_path):
     assert reloaded.get_force_price("НС-1") == 20990
 
 
-def test_non_forced_row_price_field_disabled(qtbot, tmp_path):
-    root = _bridge_root(tmp_path)
-    local_cfg = LocalConfig(root / "config" / "config.yaml")
-    dlg = EditSeriesDialog(_row(), root, local_cfg, FakeSsh())
-    qtbot.addWidget(dlg)
-    assert dlg.price_field.isEnabled() is False
-
-
-def test_non_forced_row_price_field_shows_computed_price(qtbot, tmp_path):
+def test_non_forced_row_price_field_editable_and_prefilled_with_computed_price(qtbot, tmp_path):
     root = _bridge_root(tmp_path)
     local_cfg = LocalConfig(root / "config" / "config.yaml")
     dlg = EditSeriesDialog(_row(price_range="25790–27790 ₽"), root, local_cfg, FakeSsh())
     qtbot.addWidget(dlg)
-    assert dlg.price_field.value() == 25790   # авторасчёт для инфо, не редактируется
+    assert dlg.price_field.isEnabled() is True   # владелец может поправить цену ЛЮБОЙ серии
+    assert dlg.price_field.value() == 25790      # по умолчанию — авторасчёт
+
+
+def test_non_forced_row_price_unchanged_does_not_create_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row(price_range="25990 ₽")
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.save()   # цену не трогали — override писать не должны
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") is None
+
+
+def test_non_forced_row_price_changed_saves_manual_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row(price_range="25990 ₽")
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.price_field.setValue(22990)
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") == 22990
+
+
+def test_non_forced_row_prefills_existing_override_instead_of_computed(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_manual_price("НС-2", 22990)
+    local_cfg.save()
+    # price_range из таблицы после деплоя УЖЕ отражает override (сервер всегда его возвращает) —
+    # поле должно показать именно override, а не пытаться «угадать» некий другой авторасчёт.
+    row = _row(price_range="22990 ₽")
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.price_field.value() == 22990
+
+
+def test_non_forced_row_updating_existing_override_to_new_value(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_manual_price("НС-2", 22990)
+    local_cfg.save()
+    row = _row(price_range="22990 ₽")
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.price_field.setValue(21990)   # владелец меняет уже существующий override на другое значение
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") == 21990
+
+
+def test_non_forced_row_leaving_existing_override_untouched_keeps_it(qtbot, tmp_path):
+    """Открыл диалог, ничего не менял, нажал «Сохранить» — override не должен пропасть.
+    (Убирать override сейчас можно только правкой config.yaml напрямую — отдельная кнопка
+    «сбросить к авторасчёту» не входит в этот объём, чтобы не гадать «изменил или нет».)"""
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_manual_price("НС-2", 22990)
+    local_cfg.save()
+    row = _row(price_range="22990 ₽")
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") == 22990
 
 
 def test_save_writes_description(qtbot, tmp_path):

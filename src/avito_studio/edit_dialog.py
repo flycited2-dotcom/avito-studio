@@ -14,8 +14,8 @@ from avito_studio.workers import GenerateCardWorker, run_in_thread
 
 
 def _leading_price(price_range: str) -> int | None:
-    """Первое число из строки вида "25990–27990 ₽" / "19990 ₽" / "—" — для информационного
-    показа авторасчитанной цены в задизейбленном поле (не forced-серии её не редактируют)."""
+    """Первое число из строки вида "25990–27990 ₽" / "19990 ₽" / "—" — предзаполнение поля цены
+    авторасчитанным значением, когда ручного override ещё нет."""
     m = re.match(r"(\d+)", price_range)
     return int(m.group(1)) if m else None
 
@@ -31,6 +31,7 @@ class EditSeriesDialog(QDialog):
         self.ssh = ssh
         self._new_photo_path: Path | None = None
         self.setWindowTitle(f"{row.brand} {row.series}")
+        self.resize(600, 500)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -41,10 +42,11 @@ class EditSeriesDialog(QDialog):
         if row.forced:
             self.price_field.setValue(local_cfg.get_force_price(row.representative_nc) or 0)
         else:
-            self.price_field.setValue(_leading_price(row.price_range) or 0)
-            self.price_field.setEnabled(False)
+            override = local_cfg.get_manual_price(row.representative_nc)
+            self.price_field.setValue(override if override is not None else _leading_price(row.price_range) or 0)
             self.price_field.setToolTip(
-                "Авторасчёт (опт + наценка) — редактируется только для товаров, добавленных вручную")
+                "По умолчанию — авторасчёт (опт + наценка). Можно задать свою цену вручную.")
+        self._initial_price_shown = self.price_field.value()
         form.addRow("Цена:", self.price_field)
 
         photo_row = QHBoxLayout()
@@ -108,6 +110,10 @@ class EditSeriesDialog(QDialog):
         пока не требуется (маленький файл, диалог модальный — пользователь и так ждёт)."""
         if self.row.forced:
             self.local_cfg.set_force_price(self.row.representative_nc, self.price_field.value())
+        elif self.price_field.value() != self._initial_price_shown:
+            # override пишем ТОЛЬКО если значение реально поменяли — иначе при каждом открытии+
+            # сохранении диалога без правки цены плодили бы записи manual_price_override.
+            self.local_cfg.set_manual_price(self.row.representative_nc, self.price_field.value())
         if self._new_photo_path:
             from avito_studio.photo_upload import upload_manual_photo
             url = upload_manual_photo(self.ssh, self._new_photo_path, self.row.representative_nc)
