@@ -66,3 +66,30 @@ def test_save_preserves_sequence_indentation_style(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert '    - "breeze|funai|sensei 2.0"' in text
     assert '    - "new|entry|x"' in text
+
+
+def test_get_force_price_reads_existing_entry(tmp_path):
+    cfg = LocalConfig(_write(tmp_path))
+    assert cfg.get_force_price("НС-1") == 18990
+    assert cfg.get_force_price("НС-999") is None
+
+
+def test_set_force_price_updates_existing_entry_and_saves(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.set_force_price("НС-1", 20990)
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_force_price("НС-1") == 20990
+    assert "ACE-07" in path.read_text(encoding="utf-8")   # серия у записи не потерялась
+
+
+def test_manual_photo_get_set_roundtrip(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    assert cfg.get_manual_photo("НС-9") is None
+    cfg.set_manual_photo("НС-9", "https://splithome.ru/static/manual-photos/НС-9.jpg")
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_manual_photo("НС-9") == "https://splithome.ru/static/manual-photos/НС-9.jpg"
+    assert reloaded.get_manual_photo("НС-2") == "https://x/2.jpg"   # старая запись не потерялась

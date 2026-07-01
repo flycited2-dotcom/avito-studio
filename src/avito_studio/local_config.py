@@ -33,6 +33,19 @@ class LocalConfig:
         elif not selected and key in seq:
             seq.remove(key)
 
+    def get_force_price(self, nc_code: str) -> int | None:
+        entry = self.data.get("catalog", {}).get("force_include", {}).get(nc_code)
+        return entry.get("price") if isinstance(entry, dict) else None
+
+    def set_force_price(self, nc_code: str, price: int) -> None:
+        self.data["catalog"]["force_include"][nc_code]["price"] = price
+
+    def get_manual_photo(self, nc_code: str) -> str | None:
+        return self.data.get("catalog", {}).get("manual_photos", {}).get(nc_code)
+
+    def set_manual_photo(self, nc_code: str, url: str) -> None:
+        self.data["catalog"].setdefault("manual_photos", {})[nc_code] = DQ(url)
+
     def save(self) -> None:
         with self.path.open("w", encoding="utf-8", newline="\n") as f:
             _yaml.dump(self.data, f)
