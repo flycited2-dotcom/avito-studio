@@ -6,6 +6,7 @@ dependencies = [
   "PySide6>=6.7",
   "ruamel.yaml>=0.18",
   "httpx>=0.27",
+  "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
