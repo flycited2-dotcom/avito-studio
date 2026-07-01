@@ -2,12 +2,20 @@
 ручное фото (manual_photos), описание серии. «Сохранить» пишет изменения ЛОКАЛЬНО (config.yaml,
 avito-descriptions/) — на сервер они уйдут отдельным нажатием «Опубликовать» в главном окне."""
 from __future__ import annotations
+import re
 from pathlib import Path
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTextEdit, QPushButton,
                                QFileDialog, QLabel, QHBoxLayout, QSpinBox)
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.local_config import LocalConfig
 from avito_studio import description_store
+
+
+def _leading_price(price_range: str) -> int | None:
+    """Первое число из строки вида "25990–27990 ₽" / "19990 ₽" / "—" — для информационного
+    показа авторасчитанной цены в задизейбленном поле (не forced-серии её не редактируют)."""
+    m = re.match(r"(\d+)", price_range)
+    return int(m.group(1)) if m else None
 
 
 class EditSeriesDialog(QDialog):
@@ -29,6 +37,7 @@ class EditSeriesDialog(QDialog):
         if row.forced:
             self.price_field.setValue(local_cfg.get_force_price(row.representative_nc) or 0)
         else:
+            self.price_field.setValue(_leading_price(row.price_range) or 0)
             self.price_field.setEnabled(False)
             self.price_field.setToolTip(
                 "Авторасчёт (опт + наценка) — редактируется только для товаров «под заказ»")

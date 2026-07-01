@@ -65,6 +65,14 @@ def test_non_forced_row_price_field_disabled(qtbot, tmp_path):
     assert dlg.price_field.isEnabled() is False
 
 
+def test_non_forced_row_price_field_shows_computed_price(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    dlg = EditSeriesDialog(_row(price_range="25790–27790 ₽"), root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.price_field.value() == 25790   # авторасчёт для инфо, не редактируется
+
+
 def test_save_writes_description(qtbot, tmp_path):
     root = _bridge_root(tmp_path)
     local_cfg = LocalConfig(root / "config" / "config.yaml")
