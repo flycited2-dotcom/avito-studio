@@ -141,3 +141,45 @@ def test_add_force_include_does_not_disturb_trailing_comment_of_next_section(tmp
     # комментарий должен остаться НЕПОСРЕДСТВЕННО перед "manual_photos:", а не между
     # force_include-записями
     assert "  # this comment belongs to manual_photos\n  manual_photos:" in text
+
+
+def test_manual_price_get_set_remove_roundtrip(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    assert cfg.get_manual_price("НС-5") is None
+    cfg.set_manual_price("НС-5", 24990)
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_manual_price("НС-5") == 24990
+    reloaded.remove_manual_price("НС-5")
+    reloaded.save()
+    assert LocalConfig(path).get_manual_price("НС-5") is None
+
+
+def test_remove_manual_price_is_idempotent_when_absent(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.remove_manual_price("НС-999")   # не должно падать, даже если секции ещё нет
+    cfg.save()
+
+
+def test_set_manual_price_new_entry_quoted_and_does_not_disturb_trailing_comment(tmp_path):
+    """Тот же сценарий, что у add_force_include: manual_price_override — совсем новая секция,
+    добавляется ПОСЛЕ selected_series, перед которым в реальном config.yaml (0-й отступ, как у
+    самого cards:) стоит комментарий про следующий раздел (cards:). Ключ должен быть в кавычках,
+    а комментарий — не сдвинут внутрь catalog."""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "catalog:\n"
+        "  selected_series:\n"
+        "    - \"a|b|c\"\n"
+        "# this comment belongs to cards\n"
+        "cards:\n"
+        "  enabled: true\n",
+        encoding="utf-8")
+    cfg = LocalConfig(path)
+    cfg.set_manual_price("НС-42", 24990)
+    cfg.save()
+    text = path.read_text(encoding="utf-8")
+    assert '"НС-42": 24990' in text
+    assert "# this comment belongs to cards\ncards:" in text

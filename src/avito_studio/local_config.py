@@ -54,6 +54,28 @@ class LocalConfig:
         # внутрь force_include. Вставка в начало не трогает последний ключ и его комментарий.
         self.data["catalog"]["force_include"].insert(0, DQ(nc_code), entry)
 
+    def get_manual_price(self, nc_code: str) -> int | None:
+        return self.data.get("catalog", {}).get("manual_price_override", {}).get(nc_code)
+
+    def set_manual_price(self, nc_code: str, price: int) -> None:
+        # insert(0, ...) НА ОБОИХ уровнях — та же причина, что в add_force_include, но здесь ещё и
+        # сам ключ manual_price_override совсем новый: обычное добавление В КОНЕЦ catalog (через
+        # setdefault) раздвигает комментарий перед следующей секцией (cards:), приклеенный к
+        # последнему существующему ключу catalog. Вставка в начало catalog это не трогает.
+        catalog = self.data["catalog"]
+        if "manual_price_override" not in catalog:
+            catalog.insert(0, "manual_price_override", CommentedMap())
+        overrides = catalog["manual_price_override"]
+        if nc_code in overrides:
+            overrides[nc_code] = price
+        else:
+            overrides.insert(0, DQ(nc_code), price)
+
+    def remove_manual_price(self, nc_code: str) -> None:
+        overrides = self.data.get("catalog", {}).get("manual_price_override")
+        if overrides and nc_code in overrides:
+            del overrides[nc_code]
+
     def get_manual_photo(self, nc_code: str) -> str | None:
         return self.data.get("catalog", {}).get("manual_photos", {}).get(nc_code)
 
