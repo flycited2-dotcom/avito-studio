@@ -108,7 +108,7 @@ class MainWindow(QMainWindow):
 
     def _open_add_forced_dialog(self) -> None:
         from avito_studio.add_forced_dialog import AddForcedProductDialog
-        dlg = AddForcedProductDialog(self.local_cfg, parent=self)
+        dlg = AddForcedProductDialog(self.local_cfg, self.ssh, parent=self)
         if not dlg.exec():
             return
         try:
