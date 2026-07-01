@@ -27,6 +27,7 @@ class MainWindow(QMainWindow):
 
         self.table = QTableView()
         self.table.setModel(self.proxy)
+        self.table.doubleClicked.connect(self._open_edit_dialog)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Поиск по бренду/серии…")
@@ -76,3 +77,15 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, message: str):
         self.statusBar().showMessage(f"Ошибка: {message}", 10000)
+
+    def _open_edit_dialog(self, proxy_index) -> None:
+        from avito_studio.edit_dialog import EditSeriesDialog
+        source_index = self.proxy.mapToSource(proxy_index)
+        row = self.model.rows[source_index.row()]
+        dlg = EditSeriesDialog(row, self.bridge_root, self.local_cfg, self.ssh, parent=self)
+        if dlg.exec():
+            dlg.save()
+            top_left = self.model.index(source_index.row(), 0)
+            bottom_right = self.model.index(source_index.row(), self.model.columnCount() - 1)
+            self.model.dataChanged.emit(top_left, bottom_right)
+            self.statusBar().showMessage("Серия сохранена локально (для сервера — «Опубликовать»)", 5000)
