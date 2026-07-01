@@ -54,18 +54,21 @@ class LocalConfig:
         # внутрь force_include. Вставка в начало не трогает последний ключ и его комментарий.
         self.data["catalog"]["force_include"].insert(0, DQ(nc_code), entry)
 
+    def _catalog_map(self, name: str) -> CommentedMap:
+        """Возвращает вложенную мапу catalog.<name>, создавая её при первом обращении.
+        insert(0, ...) — а не обычное присваивание в конец: комментарий перед СЛЕДУЮЩЕЙ секцией
+        (напр. cards:) физически приклеен ruamel к ПОСЛЕДНЕМУ существующему ключу catalog;
+        добавление нового ключа в конец раздвигает эту склейку. Вставка в начало не трогает её."""
+        catalog = self.data["catalog"]
+        if name not in catalog:
+            catalog.insert(0, name, CommentedMap())
+        return catalog[name]
+
     def get_manual_price(self, nc_code: str) -> int | None:
         return self.data.get("catalog", {}).get("manual_price_override", {}).get(nc_code)
 
     def set_manual_price(self, nc_code: str, price: int) -> None:
-        # insert(0, ...) НА ОБОИХ уровнях — та же причина, что в add_force_include, но здесь ещё и
-        # сам ключ manual_price_override совсем новый: обычное добавление В КОНЕЦ catalog (через
-        # setdefault) раздвигает комментарий перед следующей секцией (cards:), приклеенный к
-        # последнему существующему ключу catalog. Вставка в начало catalog это не трогает.
-        catalog = self.data["catalog"]
-        if "manual_price_override" not in catalog:
-            catalog.insert(0, "manual_price_override", CommentedMap())
-        overrides = catalog["manual_price_override"]
+        overrides = self._catalog_map("manual_price_override")
         if nc_code in overrides:
             overrides[nc_code] = price
         else:
@@ -73,6 +76,21 @@ class LocalConfig:
 
     def remove_manual_price(self, nc_code: str) -> None:
         overrides = self.data.get("catalog", {}).get("manual_price_override")
+        if overrides and nc_code in overrides:
+            del overrides[nc_code]
+
+    def get_card_brief(self, nc_code: str) -> str | None:
+        return self.data.get("catalog", {}).get("manual_card_brief", {}).get(nc_code)
+
+    def set_card_brief(self, nc_code: str, text: str) -> None:
+        overrides = self._catalog_map("manual_card_brief")
+        if nc_code in overrides:
+            overrides[nc_code] = DQ(text)
+        else:
+            overrides.insert(0, DQ(nc_code), DQ(text))
+
+    def remove_card_brief(self, nc_code: str) -> None:
+        overrides = self.data.get("catalog", {}).get("manual_card_brief")
         if overrides and nc_code in overrides:
             del overrides[nc_code]
 

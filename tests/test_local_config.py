@@ -183,3 +183,34 @@ def test_set_manual_price_new_entry_quoted_and_does_not_disturb_trailing_comment
     text = path.read_text(encoding="utf-8")
     assert '"НС-42": 24990' in text
     assert "# this comment belongs to cards\ncards:" in text
+
+
+def test_card_brief_get_set_remove_roundtrip(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    assert cfg.get_card_brief("НС-2") is None
+    cfg.set_card_brief("НС-2", "Тихий, мощный, Wi-Fi")
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.get_card_brief("НС-2") == "Тихий, мощный, Wi-Fi"
+    reloaded.remove_card_brief("НС-2")
+    reloaded.save()
+    assert LocalConfig(path).get_card_brief("НС-2") is None
+
+
+def test_card_brief_new_entry_does_not_disturb_trailing_comment(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "catalog:\n"
+        "  selected_series:\n"
+        "    - \"a|b|c\"\n"
+        "# this comment belongs to cards\n"
+        "cards:\n"
+        "  enabled: true\n",
+        encoding="utf-8")
+    cfg = LocalConfig(path)
+    cfg.set_card_brief("НС-42", "Компактный, тихий")
+    cfg.save()
+    text = path.read_text(encoding="utf-8")
+    assert '"НС-42": "Компактный, тихий"' in text
+    assert "# this comment belongs to cards\ncards:" in text
