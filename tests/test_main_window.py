@@ -14,6 +14,10 @@ class FakeSsh:
             {"key": "a", "source": "breeze", "brand": "Funai", "series": "Sensei",
              "category_id": 2, "stock_total": 2, "has_card": True, "forced": False,
              "members": [{"nc_code": "1", "btu_calc": 7, "stock": 2, "price": 100,
+                         "price_ok": True, "forced": False}]},
+            {"key": "b", "source": "daichi", "brand": "Midea", "series": "Изи",
+             "category_id": 2, "stock_total": 1, "has_card": False, "forced": False,
+             "members": [{"nc_code": "2", "btu_calc": 9, "stock": 1, "price": 200,
                          "price_ok": True, "forced": False}]}]})
 
     def put(self, remote_path, data):
@@ -27,7 +31,7 @@ def test_refresh_populates_table_synchronously(qtbot, tmp_path):
     qtbot.addWidget(win)
     with qtbot.waitSignal(win.refresh_done, timeout=3000):
         win.refresh()
-    assert win.model.rowCount() == 1
+    assert win.model.rowCount() == 2
     assert win.model.rows[0].brand == "Funai"
 
 
@@ -128,3 +132,60 @@ def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):
     with qtbot.waitSignal(win.deploy_done, timeout=3000):
         win.publish()
     assert len(win._threads) == 1
+
+
+def test_busy_guard_disables_and_reenables_toolbar_actions(qtbot, tmp_path):
+    # двойной клик по «Опубликовать» не должен запускать два параллельных деплоя
+    win = _win(qtbot, tmp_path)
+    win._set_busy(True)
+    assert all(not a.isEnabled() for a in win._busy_actions)
+    win._set_busy(False)
+    assert all(a.isEnabled() for a in win._busy_actions)
+
+
+def test_publish_reenables_actions_after_success(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    with qtbot.waitSignal(win.deploy_done, timeout=3000):
+        win.publish()
+    assert all(a.isEnabled() for a in win._busy_actions)
+
+
+def test_edit_dialog_opens_correct_row_with_filter_and_sort(qtbot, tmp_path, monkeypatch):
+    # фильтр + сортировка меняют порядок строк в ПРОКСИ; двойной клик обязан открывать
+    # именно ту серию, по которой кликнули (mapToSource), а не строку с тем же номером в модели
+    win = _win(qtbot, tmp_path)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    win.search.setText("Midea")           # в прокси остаётся одна строка (в модели она вторая)
+    assert win.proxy.rowCount() == 1
+    from avito_studio.edit_dialog import EditSeriesDialog
+    opened = {}
+    real_init = EditSeriesDialog.__init__
+
+    def spy_init(self, row, *a, **k):
+        opened["row"] = row
+        real_init(self, row, *a, **k)
+        qtbot.addWidget(self)   # иначе окно-сирота может уронить teardown интерпретатора
+    monkeypatch.setattr(EditSeriesDialog, "__init__", spy_init)
+    monkeypatch.setattr(EditSeriesDialog, "exec", lambda self: 0)   # сразу «Отмена»
+    win._open_edit_dialog(win.proxy.index(0, 0))
+    assert opened["row"].brand == "Midea"
+
+
+def test_publish_failure_shows_critical_box_and_reenables(qtbot, tmp_path, monkeypatch):
+    # провал публикации — денежный путь: пользователь ОБЯЗАН увидеть модальную ошибку,
+    # а не пропустить 10-секундную строку в статус-баре и думать, что всё ушло на Avito
+    win = _win(qtbot, tmp_path)
+
+    def boom(remote_path, data):
+        raise RuntimeError("No space left on device")
+    win.ssh.put = boom
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    shown = {"error": False}
+    monkeypatch.setattr(QMessageBox, "critical",
+                        staticmethod(lambda *a, **k: shown.update(error=True)))
+    with qtbot.waitSignal(win.publish_failed, timeout=3000):
+        win.publish()
+    assert shown["error"] is True
+    assert all(a.isEnabled() for a in win._busy_actions)

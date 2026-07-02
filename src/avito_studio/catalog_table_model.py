@@ -1,11 +1,24 @@
 """Qt-модель таблицы каталога. Столбец «Публикуется» — чекбокс; переключение сразу правит
 объект CatalogRow в памяти и запоминает ключ как «несохранённый» (dirty_keys) — реальная запись
-в config.yaml происходит через LocalConfig при нажатии «Сохранить»/«Опубликовать» в главном окне."""
+в config.yaml происходит через LocalConfig при нажатии «Сохранить»/«Опубликовать» в главном окне.
+
+Qt.UserRole отдаёт СОРТИРОВОЧНЫЕ значения (число для цены/остатка, а не строку "25990 ₽") —
+прокси в главном окне сортирует по нему (setSortRole), иначе "9990 ₽" встаёт выше "25990 ₽"."""
 from __future__ import annotations
+import re
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from avito_studio.catalog_service import CatalogRow
+from avito_studio.theme import GREEN, RED, MUTED
 
 _HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
+
+# значения avito_status из /autoload/v4/uploads/last_successful/items
+_STATUS_BAD = {"blocked", "rejected", "removed", "archived"}
+
+
+def _leading_int(price_range: str) -> int:
+    m = re.match(r"(\d+)", price_range)
+    return int(m.group(1)) if m else -1   # «—» уходит в конец при сортировке по возрастанию
 
 
 class CatalogTableModel(QAbstractTableModel):
@@ -42,23 +55,55 @@ class CatalogTableModel(QAbstractTableModel):
         if col == self.COL_SELECTED:
             if role == Qt.CheckStateRole:
                 return Qt.Checked if row.selected else Qt.Unchecked
+            if role == Qt.UserRole:
+                return int(row.selected)
             return None
-        if role != Qt.DisplayRole:
+        if role == Qt.DisplayRole:
+            return {
+                self.COL_BRAND: row.brand,
+                self.COL_SERIES: row.series,
+                self.COL_SIZES: row.sizes,
+                self.COL_PRICE: row.price_range,
+                self.COL_STOCK: str(row.stock_total),
+                self.COL_CARD: "✓" if row.has_card else "—",
+                self.COL_AVITO_STATUS: row.avito_status or "—",
+            }.get(col)
+        if role == Qt.UserRole:   # сортировка (см. docstring модуля)
+            return {
+                self.COL_BRAND: row.brand.lower(),
+                self.COL_SERIES: row.series.lower(),
+                self.COL_SIZES: row.sizes,
+                self.COL_PRICE: _leading_int(row.price_range),
+                self.COL_STOCK: row.stock_total,
+                self.COL_CARD: int(row.has_card),
+                self.COL_AVITO_STATUS: row.avito_status or "",
+            }.get(col)
+        if role == Qt.ForegroundRole:
+            if col == self.COL_CARD:
+                return GREEN if row.has_card else MUTED
+            if col == self.COL_AVITO_STATUS:
+                if not row.avito_status:
+                    return MUTED
+                return RED if row.avito_status.lower() in _STATUS_BAD else GREEN
+            if col == self.COL_STOCK and row.stock_total == 0:
+                return MUTED
+            if col == self.COL_PRICE and row.price_range == "—":
+                return MUTED
             return None
-        return {
-            self.COL_BRAND: row.brand,
-            self.COL_SERIES: row.series,
-            self.COL_SIZES: row.sizes,
-            self.COL_PRICE: row.price_range,
-            self.COL_STOCK: str(row.stock_total),
-            self.COL_CARD: "✓" if row.has_card else "—",
-            self.COL_AVITO_STATUS: row.avito_status or "—",
-        }.get(col)
+        if role == Qt.TextAlignmentRole:
+            if col == self.COL_PRICE:
+                return int(Qt.AlignRight | Qt.AlignVCenter)
+            if col in (self.COL_SIZES, self.COL_STOCK, self.COL_CARD, self.COL_AVITO_STATUS):
+                return int(Qt.AlignCenter)
+            return None
+        return None
 
     def setData(self, index, value, role=Qt.EditRole):
         if index.column() == self.COL_SELECTED and role == Qt.CheckStateRole:
             row = self.rows[index.row()]
-            row.selected = (value == Qt.Checked)
+            # клик мышью приходит от делегата как ГОЛЫЙ int (2), из теста — как enum;
+            # Qt.CheckState — чистый Python-enum (2 == Qt.Checked даёт False), нормализуем
+            row.selected = (Qt.CheckState(value) == Qt.Checked)
             self.dirty_keys.add(row.key)
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
             return True

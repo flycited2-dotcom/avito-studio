@@ -51,6 +51,7 @@ def fetch_catalog(ssh, local_cfg: LocalConfig) -> list[CatalogRow]:
             sizes=_sizes_label(g["members"]), stock_total=g["stock_total"],
             has_card=g["has_card"], forced=g["forced"],
             selected=local_cfg.is_selected(g["key"]),
-            representative_nc=g["members"][0]["nc_code"],
+            # аномальная серия без членов не должна ронять всё «Обновить» целиком
+            representative_nc=g["members"][0]["nc_code"] if g["members"] else "",
             price_range=_price_range_label(g["members"])))
     return rows

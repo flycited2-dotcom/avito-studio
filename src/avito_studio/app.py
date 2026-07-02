@@ -1,9 +1,11 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from avito_studio.ssh_client import SshClient
 from avito_studio.main_window import MainWindow
+from avito_studio.theme import apply_theme
 
 # Путь checkout'а avito-bridge на этой машине. В .exe (PyInstaller --onefile) __file__
 # указывает во временную распаковку (_MEIxxxxx), а не на реальные исходники на диске —
@@ -22,12 +24,14 @@ def default_bridge_root() -> Path:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    apply_theme(app)
     bridge_root = default_bridge_root()
     ssh = SshClient(host=DEFAULT_SSH_HOST, key_path=DEFAULT_SSH_KEY)
     win = MainWindow(bridge_root=bridge_root,
                      config_path=bridge_root / "config" / "config.yaml", ssh=ssh)
-    win.resize(1000, 600)
+    win.resize(1150, 680)
     win.show()
+    QTimer.singleShot(200, win.refresh)   # каталог грузится сам — не заставляем жать «Обновить»
     return app.exec()
 
 

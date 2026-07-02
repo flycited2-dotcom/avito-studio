@@ -52,3 +52,16 @@ def test_fetch_catalog_merges_remote_json_with_local_selection(tmp_path):
     assert sensei.representative_nc == "НС-1"          # первый член = репрезентативный (младший размер)
     assert sensei.price_range == "25990–27990 ₽"
     assert izy.price_range == "19990 ₽"
+
+
+def test_fetch_catalog_survives_series_without_members(tmp_path):
+    # аномальный экспорт (серия без членов) не должен ронять всё «Обновить» целиком
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(FIXTURE_CFG, encoding="utf-8")
+    ssh = FakeSsh(json.dumps({"generated_at": "x", "series": [
+        {"key": "a|b|c", "source": "a", "brand": "B", "series": "C", "category_id": 2,
+         "stock_total": 0, "has_card": False, "forced": False, "members": []}]}))
+    rows = fetch_catalog(ssh, LocalConfig(cfg_path))
+    assert len(rows) == 1
+    assert rows[0].representative_nc == ""
+    assert rows[0].price_range == "—"

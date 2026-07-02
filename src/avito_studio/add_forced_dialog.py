@@ -23,11 +23,14 @@ class AddForcedProductDialog(QDialog):
         self.resize(520, 480)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
         hint = QLabel(
             "Артикул поставщика (nc_code) — в основной таблице его не видно (там только бренд/серия).\n"
             "Уточните артикул в Excel-каталоге поставщика или у товароведа перед вводом.")
         hint.setWordWrap(True)
+        hint.setProperty("hint", True)
         layout.addWidget(hint)
 
         form = QFormLayout()
@@ -69,16 +72,20 @@ class AddForcedProductDialog(QDialog):
             "товар там появится (после «Обновить» → «Опубликовать»)."
         )
         note.setWordWrap(True)
+        note.setProperty("hint", True)
         layout.addWidget(note)
 
         buttons = QHBoxLayout()
+        buttons.addStretch()
         self.save_btn = QPushButton("Добавить")
+        self.save_btn.setProperty("accent", True)
+        self.save_btn.setDefault(True)
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._validate_and_accept)
         cancel_btn = QPushButton("Отмена")
         cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(self.save_btn)
         buttons.addWidget(cancel_btn)
+        buttons.addWidget(self.save_btn)
         layout.addLayout(buttons)
 
     def _update_save_enabled(self, text: str) -> None:

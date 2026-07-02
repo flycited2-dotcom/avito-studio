@@ -34,6 +34,8 @@ class EditSeriesDialog(QDialog):
         self.resize(600, 500)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
         form = QFormLayout()
 
         self.price_field = QSpinBox()
@@ -89,12 +91,15 @@ class EditSeriesDialog(QDialog):
         layout.addWidget(self.description_edit)
 
         buttons = QHBoxLayout()
+        buttons.addStretch()
         save_btn = QPushButton("Сохранить")
+        save_btn.setProperty("accent", True)
+        save_btn.setDefault(True)
         save_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton("Отмена")
         cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(save_btn)
         buttons.addWidget(cancel_btn)
+        buttons.addWidget(save_btn)
         layout.addLayout(buttons)
 
     def _choose_photo(self) -> None:
