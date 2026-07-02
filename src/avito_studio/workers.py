@@ -79,6 +79,67 @@ class AvitoStatusWorker(QObject):
         self.finished.emit(statuses)
 
 
+class PhotoUploadWorker(QObject):
+    finished = Signal(str)   # публичный URL загруженного фото
+    failed = Signal(str)
+
+    def __init__(self, ssh, local_path, nc_code: str):
+        super().__init__()
+        self.ssh = ssh
+        self.local_path = local_path
+        self.nc_code = nc_code
+
+    def run(self):
+        from avito_studio.photo_upload import upload_manual_photo
+        try:
+            url = upload_manual_photo(self.ssh, self.local_path, self.nc_code)
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished.emit(url)
+
+
+class _BlockingWaiter(QObject):
+    """Приёмник результата worker'а, живущий в ГЛАВНОМ потоке: bound-методы QObject дают
+    queued-доставку сигналов внутрь loop.exec(). Голые замыкания-функции выполнялись бы прямо
+    в потоке worker'а — loop.quit() мог прозвучать ДО loop.exec() (no-op) и exec() вис навсегда."""
+
+    def __init__(self, loop):
+        super().__init__()
+        self.loop = loop
+        self.result: dict = {}
+
+    def ok(self, url: str) -> None:
+        self.result["url"] = url
+        self.loop.quit()
+
+    def fail(self, message: str) -> None:
+        self.result["error"] = message
+        self.loop.quit()
+
+
+def upload_photo_blocking(ssh, local_path, nc_code: str, parent=None) -> str:
+    """Грузит фото в QThread, но для вызывающего кода остаётся синхронным вызовом:
+    локальный QEventLoop продолжает крутить UI (окно не «Не отвечает» на медленной сети),
+    модальный прогресс-диалог показывает, что происходит. Ошибка — RuntimeError."""
+    from PySide6.QtCore import QEventLoop, Qt
+    from PySide6.QtWidgets import QProgressDialog
+    progress = QProgressDialog("Загрузка фото на сервер…", "", 0, 0, parent)
+    progress.setCancelButton(None)   # отмена на полпути оставила бы файл на сервере без записи в config
+    progress.setWindowTitle("Загрузка")
+    progress.setWindowModality(Qt.WindowModal)
+    progress.setMinimumDuration(300)   # не мигать при мгновенной загрузке
+    loop = QEventLoop()
+    waiter = _BlockingWaiter(loop)
+    thread = run_in_thread(PhotoUploadWorker(ssh, local_path, nc_code), waiter.ok, waiter.fail)
+    loop.exec()
+    thread.wait(5000)   # даём потоку штатно завершиться до выхода из функции
+    progress.close()
+    if "error" in waiter.result:
+        raise RuntimeError(waiter.result["error"])
+    return waiter.result["url"]
+
+
 def run_in_thread(worker: QObject, on_finished, on_failed) -> QThread:
     """Поднимает worker.run() в QThread, коннектит сигналы, возвращает thread
     (вызывающий обязан держать ссылку, иначе Python/Qt соберёт поток раньше времени).

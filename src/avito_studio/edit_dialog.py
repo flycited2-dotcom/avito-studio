@@ -1,23 +1,15 @@
-"""Диалог редактирования серии: цена (только для товаров «под заказ» — force_include),
-ручное фото (manual_photos), описание серии. «Сохранить» пишет изменения ЛОКАЛЬНО (config.yaml,
-avito-descriptions/) — на сервер они уйдут отдельным нажатием «Опубликовать» в главном окне."""
+"""Диалог редактирования серии: цена (любая серия, с кнопкой возврата к авторасчёту),
+ручное фото (manual_photos), УТП карточки, описание серии. «Сохранить» пишет изменения ЛОКАЛЬНО
+(config.yaml, avito-descriptions/) — на сервер они уйдут отдельным нажатием «Опубликовать»."""
 from __future__ import annotations
-import re
 from pathlib import Path
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout, QTextEdit, QPushButton,
                                QFileDialog, QLabel, QHBoxLayout, QSpinBox)
-from avito_studio.catalog_service import CatalogRow
+from avito_studio.catalog_service import CatalogRow, leading_price
 from avito_studio.local_config import LocalConfig
 from avito_studio import description_store
 from avito_studio.workers import GenerateCardWorker, run_in_thread
-
-
-def _leading_price(price_range: str) -> int | None:
-    """Первое число из строки вида "25990–27990 ₽" / "19990 ₽" / "—" — предзаполнение поля цены
-    авторасчитанным значением, когда ручного override ещё нет."""
-    m = re.match(r"(\d+)", price_range)
-    return int(m.group(1)) if m else None
 
 
 class EditSeriesDialog(QDialog):
@@ -41,15 +33,25 @@ class EditSeriesDialog(QDialog):
         self.price_field = QSpinBox()
         self.price_field.setRange(0, 10_000_000)
         self.price_field.setSuffix(" ₽")
+        self.reset_price_btn: QPushButton | None = None
+        self._reset_price = False
+        price_row = QHBoxLayout()
+        price_row.addWidget(self.price_field, 1)
         if row.forced:
             self.price_field.setValue(local_cfg.get_force_price(row.representative_nc) or 0)
         else:
             override = local_cfg.get_manual_price(row.representative_nc)
-            self.price_field.setValue(override if override is not None else _leading_price(row.price_range) or 0)
+            self.price_field.setValue(override if override is not None else leading_price(row.price_range) or 0)
             self.price_field.setToolTip(
                 "По умолчанию — авторасчёт (опт + наценка). Можно задать свою цену вручную.")
+            # у товара «под заказ» нет авторасчёта — кнопка сброса только для обычных серий
+            self.reset_price_btn = QPushButton("Вернуть авторасчёт")
+            self.reset_price_btn.setToolTip(
+                "Снять ручную цену: после «Опубликовать» цена снова считается автоматически (опт + наценка).")
+            self.reset_price_btn.clicked.connect(self._toggle_price_reset)
+            price_row.addWidget(self.reset_price_btn)
         self._initial_price_shown = self.price_field.value()
-        form.addRow("Цена:", self.price_field)
+        form.addRow("Цена:", price_row)
 
         photo_row = QHBoxLayout()
         self.photo_label = QLabel(local_cfg.get_manual_photo(row.representative_nc) or "(нет ручного фото)")
@@ -75,7 +77,7 @@ class EditSeriesDialog(QDialog):
         self.utp_edit = QTextEdit()
         self.utp_edit.setPlaceholderText(
             "Оставьте пустым — фотоагент возьмёт стандартный текст (бренд/тип/размер/инвертор). "
-            "Заполните, если хотите подсветить что-то особенное для этого товара.")
+            "Заполните, если хотите подсветить что-то особенное. Очистите поле — вернётся автотекст.")
         self.utp_edit.setMaximumHeight(80)
         self.utp_edit.setPlainText(local_cfg.get_card_brief(row.representative_nc) or "")
         self._initial_utp_shown = self.utp_edit.toPlainText()
@@ -101,6 +103,12 @@ class EditSeriesDialog(QDialog):
         buttons.addWidget(cancel_btn)
         buttons.addWidget(save_btn)
         layout.addLayout(buttons)
+
+    def _toggle_price_reset(self) -> None:
+        self._reset_price = not self._reset_price
+        self.price_field.setEnabled(not self._reset_price)
+        self.reset_price_btn.setText("Оставить ручную цену" if self._reset_price
+                                     else "Вернуть авторасчёт")
 
     def _choose_photo(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Выбрать фото", "", "Изображения (*.jpg *.jpeg *.png)")
@@ -129,18 +137,25 @@ class EditSeriesDialog(QDialog):
         пока не требуется (маленький файл, диалог модальный — пользователь и так ждёт)."""
         if self.row.forced:
             self.local_cfg.set_force_price(self.row.representative_nc, self.price_field.value())
+        elif self._reset_price:
+            self.local_cfg.remove_manual_price(self.row.representative_nc)
         elif self.price_field.value() != self._initial_price_shown:
             # override пишем ТОЛЬКО если значение реально поменяли — иначе при каждом открытии+
             # сохранении диалога без правки цены плодили бы записи manual_price_override.
             self.local_cfg.set_manual_price(self.row.representative_nc, self.price_field.value())
         if self._new_photo_path:
-            from avito_studio.photo_upload import upload_manual_photo
-            url = upload_manual_photo(self.ssh, self._new_photo_path, self.row.representative_nc)
+            from avito_studio.workers import upload_photo_blocking
+            url = upload_photo_blocking(self.ssh, self._new_photo_path,
+                                        self.row.representative_nc, parent=self)
             self.local_cfg.set_manual_photo(self.row.representative_nc, url)
         if self.utp_edit.toPlainText() != self._initial_utp_shown:
-            # так же, как с ценой — пишем override ТОЛЬКО при реальном изменении, иначе открытие
-            # и сохранение диалога без правки УТП засоряло бы config.yaml пустыми записями.
-            self.local_cfg.set_card_brief(self.row.representative_nc, self.utp_edit.toPlainText())
+            # пишем override ТОЛЬКО при реальном изменении; очищенное поле = «вернуть автотекст»
+            # (снимаем override, а не пишем пустую строку в config.yaml)
+            text = self.utp_edit.toPlainText().strip()
+            if text:
+                self.local_cfg.set_card_brief(self.row.representative_nc, self.utp_edit.toPlainText())
+            else:
+                self.local_cfg.remove_card_brief(self.row.representative_nc)
         self.local_cfg.save()
         if self.description_edit.toPlainText() != self._initial_description_shown:
             # аналогично: не плодим пустые файлы-заглушки в avito-descriptions/ на каждое

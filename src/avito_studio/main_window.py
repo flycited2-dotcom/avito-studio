@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit, QSt
 from avito_studio.local_config import LocalConfig
 from avito_studio.catalog_table_model import CatalogTableModel
 from avito_studio.workers import RefreshWorker, DeployWorker, AvitoStatusWorker, run_in_thread
+from avito_studio import publish_summary
 
 
 class MainWindow(QMainWindow):
@@ -14,11 +15,12 @@ class MainWindow(QMainWindow):
     deploy_done = Signal()
     publish_failed = Signal(str)
 
-    def __init__(self, bridge_root: Path, config_path: Path, ssh):
+    def __init__(self, bridge_root: Path, config_path: Path, ssh, snapshot_dir: Path | None = None):
         super().__init__()
         self.setWindowTitle("Avito Content Studio")
         self.bridge_root = Path(bridge_root)
         self.config_path = Path(config_path)
+        self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else publish_summary.DEFAULT_SNAPSHOT_DIR
         self.ssh = ssh
         self.local_cfg = LocalConfig(self.config_path)
         self.model = CatalogTableModel([])
@@ -111,15 +113,31 @@ class MainWindow(QMainWindow):
         self.local_cfg.save()
         self.model.dirty_keys.clear()
 
+    def _publish_question(self) -> str:
+        """Текст подтверждения: конкретная сводка изменений с прошлой публикации, если есть база."""
+        changes = publish_summary.summarize_changes(self.bridge_root, self.snapshot_dir)
+        if changes is None:   # первая публикация из студии — базы для сравнения ещё нет
+            return ("Локальные изменения (публикация серий, цены, фото, описания) уйдут на сервер "
+                    "и попадут в реальный фид Avito. Продолжить?")
+        if not changes:
+            return ("Изменений с прошлой публикации не найдено.\n"
+                    "Всё равно отправить на сервер (фид пересоберётся)?")
+        shown = changes[:15]
+        rest = len(changes) - len(shown)
+        lines = "\n".join(f"• {c}" for c in shown)
+        if rest > 0:
+            lines += f"\n…и ещё {rest}"
+        return f"На сервер и в реальный фид Avito уйдут изменения:\n\n{lines}\n\nПродолжить?"
+
     def publish(self):
+        # галочки «Публикуется» сохраняем локально ДО сводки — иначе их не будет в списке;
+        # локальная запись безвредна (диалоги и так пишут локально, публикация — отдельный шаг)
+        self.save_local_selection()
         reply = QMessageBox.question(
-            self, "Опубликовать изменения?",
-            "Локальные изменения (публикация серий, цены, фото, описания) уйдут на сервер и "
-            "попадут в реальный фид Avito. Продолжить?",
+            self, "Опубликовать изменения?", self._publish_question(),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
-        self.save_local_selection()
         self._set_busy(True)
         self._status("Публикация на сервер (может занять до минуты)…")
         worker = DeployWorker(self.bridge_root, self.ssh)
@@ -127,6 +145,10 @@ class MainWindow(QMainWindow):
 
     def _on_publish_ok(self, output: str):
         self._set_busy(False)
+        try:
+            publish_summary.save_snapshot(self.bridge_root, self.snapshot_dir)
+        except Exception:
+            pass   # сбой снапшота не должен маскировать УСПЕШНУЮ публикацию (сводка просто будет общей)
         self._status("Опубликовано. Сервер пересобирает фид.", 8000)
         self.deploy_done.emit()
 

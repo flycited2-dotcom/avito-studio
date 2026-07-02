@@ -119,8 +119,7 @@ def test_non_forced_row_updating_existing_override_to_new_value(qtbot, tmp_path)
 
 def test_non_forced_row_leaving_existing_override_untouched_keeps_it(qtbot, tmp_path):
     """Открыл диалог, ничего не менял, нажал «Сохранить» — override не должен пропасть.
-    (Убирать override сейчас можно только правкой config.yaml напрямую — отдельная кнопка
-    «сбросить к авторасчёту» не входит в этот объём, чтобы не гадать «изменил или нет».)"""
+    Явный сброс — только кнопкой «Вернуть авторасчёт» (никакого угадывания «изменил или нет»)."""
     root = _bridge_root(tmp_path)
     local_cfg = LocalConfig(root / "config" / "config.yaml")
     local_cfg.set_manual_price("НС-2", 22990)
@@ -131,6 +130,47 @@ def test_non_forced_row_leaving_existing_override_untouched_keeps_it(qtbot, tmp_
     dlg.save()
     reloaded = LocalConfig(root / "config" / "config.yaml")
     assert reloaded.get_manual_price("НС-2") == 22990
+
+
+def test_reset_price_button_removes_existing_override(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_manual_price("НС-2", 22990)
+    local_cfg.save()
+    row = _row(price_range="22990 ₽")
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.reset_price_btn.click()
+    assert dlg.price_field.isEnabled() is False   # видно, что ручная цена больше не действует
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") is None
+
+
+def test_reset_price_button_can_be_toggled_back(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_manual_price("НС-2", 22990)
+    local_cfg.save()
+    row = _row(price_range="22990 ₽")
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.reset_price_btn.click()   # передумал
+    dlg.reset_price_btn.click()
+    assert dlg.price_field.isEnabled() is True
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_price("НС-2") == 22990   # override остался
+
+
+def test_reset_price_button_hidden_for_forced_rows(qtbot, tmp_path):
+    # у товара «под заказ» нет авторасчёта — сбрасывать не к чему
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    row = _row(key="rusklimat|force|НС-1", forced=True, representative_nc="НС-1", price_range="18990 ₽")
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.reset_price_btn is None
 
 
 def test_save_writes_description(qtbot, tmp_path):
@@ -175,6 +215,27 @@ def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     assert reloaded.get_manual_photo("НС-2") == "https://splithome.ru/static/manual-photos/НС-2.jpg"
 
 
+def test_save_photo_upload_failure_raises_for_caller(qtbot, tmp_path):
+    # ошибка загрузки должна долететь до main_window (там QMessageBox.critical), а не потеряться
+    import pytest
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (4, 4), color="red").save(photo)
+    ssh = FakeSsh()
+
+    def boom(remote_path, data):
+        raise RuntimeError("No space left on device")
+    ssh.put = boom
+    dlg = EditSeriesDialog(_row(), root, local_cfg, ssh)
+    qtbot.addWidget(dlg)
+    dlg._new_photo_path = photo
+    with pytest.raises(RuntimeError, match="No space left"):
+        dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_manual_photo("НС-2") is None   # URL не записан при провале
+
+
 def test_utp_field_empty_by_default_and_unchanged_does_not_create_override(qtbot, tmp_path):
     root = _bridge_root(tmp_path)
     local_cfg = LocalConfig(root / "config" / "config.yaml")
@@ -208,6 +269,21 @@ def test_utp_field_prefilled_with_existing_override(qtbot, tmp_path):
     dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
     qtbot.addWidget(dlg)
     assert dlg.utp_edit.toPlainText() == "Тихий, мощный"
+
+
+def test_utp_field_cleared_removes_override_instead_of_writing_empty(qtbot, tmp_path):
+    # «очистил поле» = «верни автотекст»: снимаем override, а не пишем пустую строку в config
+    root = _bridge_root(tmp_path)
+    local_cfg = LocalConfig(root / "config" / "config.yaml")
+    local_cfg.set_card_brief("НС-2", "Тихий, мощный")
+    local_cfg.save()
+    row = _row()
+    dlg = EditSeriesDialog(row, root, LocalConfig(root / "config" / "config.yaml"), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.utp_edit.setPlainText("")
+    dlg.save()
+    reloaded = LocalConfig(root / "config" / "config.yaml")
+    assert reloaded.get_card_brief("НС-2") is None
 
 
 def test_generate_card_button_disabled_when_card_exists(qtbot, tmp_path):

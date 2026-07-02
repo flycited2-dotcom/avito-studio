@@ -2,6 +2,7 @@
 + локальный статус публикации (config.yaml, LocalConfig)."""
 from __future__ import annotations
 import json
+import re
 from dataclasses import dataclass
 from avito_studio.local_config import LocalConfig
 
@@ -23,6 +24,13 @@ class CatalogRow:
     representative_nc: str = ""
     price_range: str = "—"
     avito_status: str | None = None
+
+
+def leading_price(price_range: str) -> int | None:
+    """Первое число из строки вида "25990–27990 ₽" / "19990 ₽"; None для "—".
+    Формат price_range задаётся здесь же (_price_range_label) — и парсер живёт рядом."""
+    m = re.match(r"(\d+)", price_range)
+    return int(m.group(1)) if m else None
 
 
 def _sizes_label(members: list[dict]) -> str:

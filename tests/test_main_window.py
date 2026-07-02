@@ -56,7 +56,8 @@ def _win(qtbot, tmp_path, catalog_yaml="catalog:\n  force_include: {}\n  manual_
     (tmp_path / "avito-descriptions").mkdir(exist_ok=True)
     cfg_path = tmp_path / "config" / "config.yaml"
     cfg_path.write_text(catalog_yaml, encoding="utf-8")
-    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
+    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh(),
+                     snapshot_dir=tmp_path / "publish-snapshot")   # не трогаем реальный ~/.avito-studio
     qtbot.addWidget(win)
     return win
 
@@ -132,6 +133,31 @@ def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):
     with qtbot.waitSignal(win.deploy_done, timeout=3000):
         win.publish()
     assert len(win._threads) == 1
+
+
+def test_publish_confirmation_lists_concrete_changes_after_first_publish(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    with qtbot.waitSignal(win.deploy_done, timeout=3000):
+        win.publish()                        # первая публикация — снапшот записан
+    win.local_cfg.set_manual_price("НС-7", 19990)
+    win.local_cfg.save()
+    asked = {}
+
+    def capture_question(parent, title, text, *a, **k):
+        asked["text"] = text
+        return QMessageBox.No               # только смотрим сводку, не публикуем
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(capture_question))
+    win.publish()
+    assert "НС-7" in asked["text"] and "19990" in asked["text"]
+
+
+def test_publish_saves_snapshot_for_next_summary(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+    with qtbot.waitSignal(win.deploy_done, timeout=3000):
+        win.publish()
+    assert (tmp_path / "publish-snapshot" / "config" / "config.yaml").exists()
 
 
 def test_busy_guard_disables_and_reenables_toolbar_actions(qtbot, tmp_path):

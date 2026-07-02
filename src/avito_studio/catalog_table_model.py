@@ -5,9 +5,8 @@
 Qt.UserRole отдаёт СОРТИРОВОЧНЫЕ значения (число для цены/остатка, а не строку "25990 ₽") —
 прокси в главном окне сортирует по нему (setSortRole), иначе "9990 ₽" встаёт выше "25990 ₽"."""
 from __future__ import annotations
-import re
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from avito_studio.catalog_service import CatalogRow
+from avito_studio.catalog_service import CatalogRow, leading_price
 from avito_studio.theme import GREEN, RED, MUTED
 
 _HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
@@ -16,9 +15,9 @@ _HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "�
 _STATUS_BAD = {"blocked", "rejected", "removed", "archived"}
 
 
-def _leading_int(price_range: str) -> int:
-    m = re.match(r"(\d+)", price_range)
-    return int(m.group(1)) if m else -1   # «—» уходит в конец при сортировке по возрастанию
+def _sort_price(price_range: str) -> int:
+    p = leading_price(price_range)
+    return p if p is not None else -1   # «—» уходит в конец при сортировке по возрастанию
 
 
 class CatalogTableModel(QAbstractTableModel):
@@ -73,7 +72,7 @@ class CatalogTableModel(QAbstractTableModel):
                 self.COL_BRAND: row.brand.lower(),
                 self.COL_SERIES: row.series.lower(),
                 self.COL_SIZES: row.sizes,
-                self.COL_PRICE: _leading_int(row.price_range),
+                self.COL_PRICE: _sort_price(row.price_range),
                 self.COL_STOCK: row.stock_total,
                 self.COL_CARD: int(row.has_card),
                 self.COL_AVITO_STATUS: row.avito_status or "",

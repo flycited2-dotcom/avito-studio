@@ -113,8 +113,8 @@ class AddForcedProductDialog(QDialog):
         self.local_cfg.add_force_include(nc, self.price_field.value(),
                                          series=self.series_field.text().strip() or None)
         if self._new_photo_path:
-            from avito_studio.photo_upload import upload_manual_photo
-            url = upload_manual_photo(self.ssh, self._new_photo_path, nc)
+            from avito_studio.workers import upload_photo_blocking
+            url = upload_photo_blocking(self.ssh, self._new_photo_path, nc, parent=self)
             self.local_cfg.set_manual_photo(nc, url)
         if self.utp_edit.toPlainText().strip():
             self.local_cfg.set_card_brief(nc, self.utp_edit.toPlainText())
