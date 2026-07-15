@@ -7,15 +7,16 @@ class RefreshWorker(QObject):
     finished = Signal(list)     # list[CatalogRow]
     failed = Signal(str)
 
-    def __init__(self, ssh, local_cfg):
+    def __init__(self, ssh, local_cfg, config_rel: str = "config/config.yaml"):
         super().__init__()
         self.ssh = ssh
         self.local_cfg = local_cfg
+        self.config_rel = config_rel   # YAML выбранного профиля (селектор в тулбаре)
 
     def run(self):
         from avito_studio.catalog_service import fetch_catalog
         try:
-            rows = fetch_catalog(self.ssh, self.local_cfg)
+            rows = fetch_catalog(self.ssh, self.local_cfg, self.config_rel)
         except Exception as e:
             self.failed.emit(str(e))
             return
@@ -154,6 +155,11 @@ def run_in_thread(worker: QObject, on_finished, on_failed) -> QThread:
     worker.failed.connect(on_failed)
     worker.finished.connect(thread.quit)
     worker.failed.connect(thread.quit)
+    # worker удаляем в ЕГО потоке, пока loop ещё жив (deleteLater в мёртвую очередь или
+    # GC из главного потока при чужой аффинности спорадически валят процесс 0xC0000409;
+    # эмпирика по вариантам паттерна — docs/qt-thread-teardown-flake.md в avito-studio)
+    worker.finished.connect(worker.deleteLater)
+    worker.failed.connect(worker.deleteLater)
     thread.finished.connect(thread.deleteLater)
     thread.start()
     return thread

@@ -177,6 +177,86 @@ def test_publish_reenables_actions_after_success(qtbot, tmp_path, monkeypatch):
     assert all(a.isEnabled() for a in win._busy_actions)
 
 
+WREATHS_JSON_SERIES = [
+    {"key": "ritualb2b|item|ritualb2b:w-1", "source": "ritualb2b", "brand": "",
+     "series": "Венок «Аврора»", "category_id": 0, "stock_total": 3, "has_card": False,
+     "forced": False, "members": [{"nc_code": "w-1", "btu_calc": None, "stock": 3,
+                                   "price": 2300, "price_ok": True, "forced": False}]},
+]
+
+
+class ProfileAwareSsh(FakeSsh):
+    """Возвращает венки для --config profiles/wreaths.yaml, иначе кондиционеры."""
+
+    def __init__(self):
+        self.calls = []
+
+    def run(self, cmd):
+        import json
+        self.calls.append(cmd)
+        if "profiles/wreaths.yaml" in cmd:
+            return json.dumps({"generated_at": "x", "series": WREATHS_JSON_SERIES})
+        return super().run(cmd)
+
+
+def _win_with_wreaths_profile(qtbot, tmp_path):
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "avito-descriptions").mkdir(exist_ok=True)
+    (tmp_path / "profiles").mkdir(exist_ok=True)
+    (tmp_path / "config" / "config.yaml").write_text(
+        "catalog:\n  force_include: {}\n  manual_photos: {}\n  selected_series: []\n", encoding="utf-8")
+    (tmp_path / "profiles" / "wreaths.yaml").write_text(
+        "catalog:\n  selected_series: []\n", encoding="utf-8")
+    win = MainWindow(bridge_root=tmp_path, config_path=tmp_path / "config" / "config.yaml",
+                     ssh=ProfileAwareSsh(), snapshot_dir=tmp_path / "publish-snapshot")
+    qtbot.addWidget(win)
+    return win
+
+
+def test_profile_selector_switches_catalog_and_local_config(qtbot, tmp_path):
+    win = _win_with_wreaths_profile(qtbot, tmp_path)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    assert win.model.rows[0].brand == "Funai"              # стартовый профиль — кондиционеры
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win._switch_profile(1)                             # «Венки»
+    assert win.profile_combo.currentIndex() == 1
+    assert [r.series for r in win.model.rows] == ["Венок «Аврора»"]
+    assert win.local_cfg.path == tmp_path / "profiles" / "wreaths.yaml"
+    assert "--config profiles/wreaths.yaml" in win.ssh.calls[-1]
+
+
+def test_profile_switch_saves_pending_selection_of_previous_profile(qtbot, tmp_path):
+    # несохранённые галочки кондиционеров не должны молча пропасть при уходе на венки
+    win = _win_with_wreaths_profile(qtbot, tmp_path)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    idx = win.model.index(0, win.model.COL_SELECTED)
+    win.model.setData(idx, Qt.Checked, Qt.CheckStateRole)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win._switch_profile(1)
+    assert '"a"' in (tmp_path / "config" / "config.yaml").read_text(encoding="utf-8")
+
+
+def test_profile_selector_reverts_when_profile_config_missing(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)                            # profiles/wreaths.yaml НЕ создан
+    shown = {"error": False}
+    monkeypatch.setattr(QMessageBox, "critical",
+                        staticmethod(lambda *a, **k: shown.update(error=True)))
+    win._switch_profile(1)
+    assert shown["error"] is True
+    assert win.profile.key == "conditioners"               # остались на кондиционерах
+    assert win.profile_combo.currentIndex() == 0
+
+
+def test_profile_combo_disabled_while_busy(qtbot, tmp_path):
+    win = _win(qtbot, tmp_path)
+    win._set_busy(True)
+    assert not win.profile_combo.isEnabled()
+    win._set_busy(False)
+    assert win.profile_combo.isEnabled()
+
+
 def test_edit_dialog_opens_correct_row_with_filter_and_sort(qtbot, tmp_path, monkeypatch):
     # фильтр + сортировка меняют порядок строк в ПРОКСИ; двойной клик обязан открывать
     # именно ту серию, по которой кликнули (mapToSource), а не строку с тем же номером в модели

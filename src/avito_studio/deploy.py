@@ -18,5 +18,9 @@ def deploy_and_rebuild(bridge_root: Path, ssh) -> str:
         with tarfile.open(tgz, "w:gz") as tar:
             tar.add(bridge_root / "config", arcname="config")
             tar.add(bridge_root / "avito-descriptions", arcname="avito-descriptions")
+            # YAML профилей (венки и далее) правится студией так же, как config.yaml —
+            # обязан уезжать тем же деплоем; папки может не быть в старых checkout'ах
+            if (bridge_root / "profiles").is_dir():
+                tar.add(bridge_root / "profiles", arcname="profiles")
         ssh.put("/tmp/studio_deploy.tgz", tgz.read_bytes())
     return ssh.run(REMOTE_DEPLOY_CMD)

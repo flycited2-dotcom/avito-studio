@@ -54,6 +54,24 @@ def test_fetch_catalog_merges_remote_json_with_local_selection(tmp_path):
     assert izy.price_range == "19990 ₽"
 
 
+def test_fetch_catalog_passes_profile_config_to_remote(tmp_path):
+    # селектор профилей: экспорт каталога должен читать YAML выбранного профиля, не боевой config
+    cfg_path = tmp_path / "wreaths.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    ssh = FakeSsh(FAKE_JSON)
+    fetch_catalog(ssh, LocalConfig(cfg_path), config_rel="profiles/wreaths.yaml")
+    assert ssh.calls[0].endswith("--config profiles/wreaths.yaml")
+
+
+def test_fetch_catalog_defaults_to_conditioners_config(tmp_path):
+    # обратная совместимость: без явного профиля — боевой кондиционерный config.yaml
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(FIXTURE_CFG, encoding="utf-8")
+    ssh = FakeSsh(FAKE_JSON)
+    fetch_catalog(ssh, LocalConfig(cfg_path))
+    assert ssh.calls[0].endswith("--config config/config.yaml")
+
+
 def test_fetch_catalog_survives_series_without_members(tmp_path):
     # аномальный экспорт (серия без членов) не должен ронять всё «Обновить» целиком
     cfg_path = tmp_path / "config.yaml"

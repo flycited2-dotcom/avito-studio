@@ -10,6 +10,11 @@ REMOTE_EXPORT_CMD = ("cd /opt/avito-bridge && export PYTHONPATH=src && "
                      ".venv/bin/python -m avito_bridge.catalog_export")
 
 
+def export_cmd(config_rel: str = "config/config.yaml") -> str:
+    """Команда экспорта каталога ВЫБРАННОГО профиля (селектор в тулбаре студии)."""
+    return f"{REMOTE_EXPORT_CMD} --config {config_rel}"
+
+
 @dataclass
 class CatalogRow:
     key: str
@@ -49,9 +54,11 @@ def _price_range_label(members: list[dict]) -> str:
     return f"{prices[0]}–{prices[-1]} ₽"
 
 
-def fetch_catalog(ssh, local_cfg: LocalConfig) -> list[CatalogRow]:
-    """ssh — любой объект с методом .run(cmd) -> str (см. SshClient)."""
-    data = json.loads(ssh.run(REMOTE_EXPORT_CMD))
+def fetch_catalog(ssh, local_cfg: LocalConfig,
+                  config_rel: str = "config/config.yaml") -> list[CatalogRow]:
+    """ssh — любой объект с методом .run(cmd) -> str (см. SshClient).
+    config_rel — YAML профиля для catalog_export (default: боевой кондиционерный)."""
+    data = json.loads(ssh.run(export_cmd(config_rel)))
     rows = []
     for g in data["series"]:
         rows.append(CatalogRow(

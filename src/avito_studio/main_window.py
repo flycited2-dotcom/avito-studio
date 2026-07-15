@@ -3,8 +3,9 @@ from pathlib import Path
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit, QStyle,
                                QStatusBar, QWidget, QVBoxLayout, QMessageBox, QHeaderView,
-                               QAbstractItemView)
+                               QAbstractItemView, QComboBox, QLabel)
 from avito_studio.local_config import LocalConfig
+from avito_studio.profiles import PROFILES, Profile
 from avito_studio.catalog_table_model import CatalogTableModel
 from avito_studio.workers import RefreshWorker, DeployWorker, AvitoStatusWorker, run_in_thread
 from avito_studio import publish_summary
@@ -22,6 +23,10 @@ class MainWindow(QMainWindow):
         self.config_path = Path(config_path)
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else publish_summary.DEFAULT_SNAPSHOT_DIR
         self.ssh = ssh
+        # Профиль бизнеса (Кондиционеры/Венки…): стартуем с первого (кондиционеры), его YAML —
+        # переданный config_path (в тестах/старых сборках он не обязан лежать в config/config.yaml).
+        self.profile: Profile = PROFILES[0]
+        self._initial_config_path = self.config_path
         self.local_cfg = LocalConfig(self.config_path)
         self.model = CatalogTableModel([])
         self.proxy = QSortFilterProxyModel()
@@ -64,6 +69,15 @@ class MainWindow(QMainWindow):
                                     "Добавить товар вручную", self._open_add_forced_dialog)
         act_status = toolbar.addAction(style.standardIcon(QStyle.SP_MessageBoxInformation),
                                        "Обновить статус Avito", self._refresh_avito_status)
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel(" Профиль: "))
+        self.profile_combo = QComboBox()
+        for p in PROFILES:
+            self.profile_combo.addItem(p.label, p)
+        # activated (а не currentIndexChanged): срабатывает только от пользователя —
+        # программный revert индекса при ошибке не должен перезапускать переключение
+        self.profile_combo.activated.connect(self._switch_profile)
+        toolbar.addWidget(self.profile_combo)
         # пока идёт фоновая операция — все действия выключены (повторный клик по «Опубликовать»
         # иначе запустил бы ВТОРОЙ параллельный деплой на боевой сервер)
         self._busy_actions = [act_refresh, act_publish, act_add, act_status]
@@ -81,9 +95,48 @@ class MainWindow(QMainWindow):
 
         self._threads = []   # держим ссылки, чтобы QThread не собрался раньше времени
 
+    def closeEvent(self, event) -> None:
+        # QThread, уничтоженный вместе с окном во время работы, роняет ВЕСЬ процесс
+        # (Qt fatal «Destroyed while thread is still running») — дожидаемся фоновых потоков
+        for t in self._threads:
+            try:
+                t.quit()
+                t.wait(3000)
+            except RuntimeError:
+                pass   # поток уже завершился и удалён (deleteLater) — обёртка Python пережила C++
+        super().closeEvent(event)
+
     def _set_busy(self, busy: bool) -> None:
         for act in self._busy_actions:
             act.setEnabled(not busy)
+        self.profile_combo.setEnabled(not busy)   # смена профиля посреди публикации = каша путей
+
+    def _profile_config_path(self, profile: Profile) -> Path:
+        if profile.key == PROFILES[0].key:
+            return self._initial_config_path
+        return self.bridge_root / profile.config_rel
+
+    def _switch_profile(self, index: int) -> None:
+        profile: Profile = self.profile_combo.itemData(index)
+        if profile.key == self.profile.key:
+            return
+        path = self._profile_config_path(profile)
+        try:
+            new_cfg = LocalConfig(path)
+        except OSError:
+            # вернуть комбо на текущий профиль: выбор не состоялся, состояние не менялось
+            self.profile_combo.setCurrentIndex(
+                next(i for i, p in enumerate(PROFILES) if p.key == self.profile.key))
+            QMessageBox.critical(self, "Профиль недоступен",
+                                 f"Не найден YAML профиля «{profile.label}»:\n{path}\n\n"
+                                 "Обновите checkout avito-bridge (ветка с профилями).")
+            return
+        self.save_local_selection()               # несохранённые галочки старого профиля — не терять
+        self.profile = profile
+        self.config_path = path
+        self.local_cfg = new_cfg
+        self.profile_combo.setCurrentIndex(index)  # при программном вызове комбо ещё не переставлен
+        self.refresh()
 
     def _status(self, message: str, timeout: int = 0, error: bool = False) -> None:
         bar = self.statusBar()
@@ -95,7 +148,7 @@ class MainWindow(QMainWindow):
     def refresh(self):
         self._set_busy(True)
         self._status("Обновление каталога с сервера…")
-        worker = RefreshWorker(self.ssh, self.local_cfg)
+        worker = RefreshWorker(self.ssh, self.local_cfg, self.profile.config_rel)
         self._threads.append(run_in_thread(worker, self._on_refresh_ok, self._on_error))
 
     def _on_refresh_ok(self, rows):
