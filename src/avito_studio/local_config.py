@@ -54,6 +54,20 @@ class LocalConfig:
         # внутрь force_include. Вставка в начало не трогает последний ключ и его комментарий.
         self.data["catalog"]["force_include"].insert(0, DQ(nc_code), entry)
 
+    def get_manual_product(self, manual_id: str) -> dict | None:
+        return self.data.get("catalog", {}).get("manual_products", {}).get(manual_id)
+
+    def add_manual_product(self, manual_id: str, spec: dict) -> None:
+        """Добавить товар, которого нет в БД поставщика, под стабильным ID приложения."""
+        products = self._catalog_map("manual_products")
+        if manual_id in products:
+            raise ValueError(
+                "Такой ручной товар уже существует. Откройте его в каталоге для редактирования.")
+        entry = CommentedMap(spec)
+        # Читаемый многострочный YAML: это полноценная карточка, а не короткий override.
+        entry.fa.set_block_style()
+        products.insert(0, DQ(manual_id), entry)
+
     def _catalog_map(self, name: str) -> CommentedMap:
         """Возвращает вложенную мапу catalog.<name>, создавая её при первом обращении.
         insert(0, ...) — а не обычное присваивание в конец: комментарий перед СЛЕДУЮЩЕЙ секцией

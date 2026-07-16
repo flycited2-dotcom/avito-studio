@@ -2,12 +2,14 @@ from PIL import Image
 import pytest
 from PySide6.QtWidgets import QMessageBox
 from avito_studio.local_config import LocalConfig
-from avito_studio.add_forced_dialog import AddForcedProductDialog, model_hint
+from avito_studio.add_forced_dialog import (AddForcedProductDialog, model_hint,
+                                            make_manual_id)
 
 FIXTURE_CFG = """\
 catalog:
   force_include: {}
   manual_photos: {}
+  manual_products: {}
   selected_series: []
 """
 
@@ -78,6 +80,13 @@ def test_full_product_title_is_rejected_before_dialog_closes(qtbot, tmp_path, mo
 def test_model_hint_extracts_code_from_telegram_title():
     assert model_hint(
         "Инвертор ROYAL CLIMA серии GRIDA RC-GR28HN (GREE) 9000Btu") == "RC-GR28HN"
+
+
+def test_manual_id_is_stable_and_safe():
+    first = make_manual_id("ROYAL CLIMA", "RCI-GR28HN", "GRIDA")
+    second = make_manual_id(" ROYAL CLIMA ", "RCI-GR28HN", "GRIDA")
+    assert first == second
+    assert first.startswith("manual-rci-gr28hn-") and " " not in first
 
 
 def test_save_rejects_invalid_code_without_mutating_config(qtbot, tmp_path):
@@ -199,3 +208,66 @@ def test_save_with_utp_stores_card_brief(qtbot, tmp_path):
     dlg.save()
     reloaded = LocalConfig(path)
     assert reloaded.get_card_brief("НС-555") == "Тихий, мощный, Wi-Fi"
+
+
+def _fill_manual_product(dlg, photo):
+    dlg.tabs.setCurrentIndex(1)
+    dlg.manual_brand_field.setText("ROYAL CLIMA")
+    dlg.manual_title_field.setText("RCI-GR28HN")
+    dlg.manual_series_field.setText("GRIDA DC EU")
+    dlg.manual_btu_field.setValue(9)
+    dlg.manual_price_field.setValue(26550)
+    dlg.manual_inverter_box.setChecked(True)
+    dlg._new_photo_path = photo
+    dlg._update_save_enabled()
+
+
+def test_manual_product_requires_all_fields_and_photo(qtbot, tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_CFG, encoding="utf-8")
+    dlg = AddForcedProductDialog(LocalConfig(path), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.tabs.setCurrentIndex(1)
+    dlg.manual_brand_field.setText("ROYAL CLIMA")
+    dlg.manual_title_field.setText("RCI-GR28HN")
+    dlg.manual_series_field.setText("GRIDA")
+    dlg.manual_btu_field.setValue(9)
+    dlg.manual_price_field.setValue(26550)
+    assert not dlg.save_btn.isEnabled()
+    dlg._new_photo_path = tmp_path / "photo.png"
+    dlg._update_save_enabled()
+    assert dlg.save_btn.isEnabled()
+
+
+def test_save_fully_manual_product_uploads_photo_and_writes_yaml(qtbot, tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_CFG, encoding="utf-8")
+    local_cfg = LocalConfig(path)
+    ssh = FakeSsh()
+    dlg = AddForcedProductDialog(local_cfg, ssh)
+    qtbot.addWidget(dlg)
+    photo = tmp_path / "photo.png"
+    Image.new("RGB", (4, 4), color="blue").save(photo)
+    _fill_manual_product(dlg, photo)
+    dlg.save()
+    manual_id = make_manual_id("ROYAL CLIMA", "RCI-GR28HN", "GRIDA DC EU Inverter")
+    product = LocalConfig(path).get_manual_product(manual_id)
+    assert product["price"] == 26550
+    assert product["btu"] == 9
+    assert product["photos"][0].endswith(f"/{manual_id}.jpg")
+    assert product["tech"]["Тип компрессора"] == "Инвертор"
+
+
+def test_manual_photo_failure_leaves_no_yaml_entry(qtbot, tmp_path, monkeypatch):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_CFG, encoding="utf-8")
+    local_cfg = LocalConfig(path)
+    dlg = AddForcedProductDialog(local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    _fill_manual_product(dlg, tmp_path / "missing.png")
+    from avito_studio import workers
+    monkeypatch.setattr(workers, "upload_photo_blocking",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("upload failed")))
+    with pytest.raises(RuntimeError, match="upload failed"):
+        dlg.save()
+    assert not local_cfg.data["catalog"]["manual_products"]

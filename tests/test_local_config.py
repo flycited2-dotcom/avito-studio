@@ -116,6 +116,32 @@ def test_add_force_include_without_series(tmp_path):
     assert reloaded.get_force_price("НС-778") == 9990
 
 
+def test_add_fully_manual_product_roundtrip(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.add_manual_product("manual-rc-gr28hn-deadbeef", {
+        "brand": "ROYAL CLIMA", "title": "RCI-GR28HN",
+        "series": "GRIDA Inverter", "category_id": 2,
+        "btu": 9, "price": 26550, "stock": 1,
+        "photos": ["https://x/manual.jpg"],
+        "tech": {"Тип компрессора": "Инвертор"},
+    })
+    cfg.save()
+    product = LocalConfig(path).get_manual_product("manual-rc-gr28hn-deadbeef")
+    assert product["brand"] == "ROYAL CLIMA"
+    assert product["price"] == 26550
+    assert product["photos"] == ["https://x/manual.jpg"]
+
+
+def test_duplicate_fully_manual_product_is_rejected(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    spec = {"brand": "B", "title": "T", "series": "S", "btu": 9, "price": 1}
+    cfg.add_manual_product("manual-x", spec)
+    with __import__("pytest").raises(ValueError, match="уже существует"):
+        cfg.add_manual_product("manual-x", spec)
+
+
 # Реальный config.yaml: комментарий про manual_photos стоит СРАЗУ после последней записи
 # force_include без пустой строки. ruamel склеивает такой комментарий с последним ключом —
 # добавление в конец мапы (обычным присваиванием) "раздвигает" склейку и комментарий уезжает
