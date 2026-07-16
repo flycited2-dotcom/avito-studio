@@ -7,16 +7,20 @@ class RefreshWorker(QObject):
     finished = Signal(list)     # list[CatalogRow]
     failed = Signal(str)
 
-    def __init__(self, ssh, local_cfg, config_rel: str = "config/config.yaml"):
+    def __init__(self, ssh, local_cfg, config_rel: str = "config/config.yaml",
+                 local_catalog: bool = False):
         super().__init__()
         self.ssh = ssh
         self.local_cfg = local_cfg
         self.config_rel = config_rel   # YAML выбранного профиля (селектор в тулбаре)
+        self.local_catalog = local_catalog
 
     def run(self):
-        from avito_studio.catalog_service import fetch_catalog
+        from avito_studio.catalog_service import fetch_catalog, fetch_local_catalog
         try:
-            rows = fetch_catalog(self.ssh, self.local_cfg, self.config_rel)
+            rows = (fetch_local_catalog(self.local_cfg.path, self.local_cfg)
+                    if self.local_catalog
+                    else fetch_catalog(self.ssh, self.local_cfg, self.config_rel))
         except Exception as e:
             self.failed.emit(str(e))
             return
@@ -98,6 +102,28 @@ class PhotoUploadWorker(QObject):
             self.failed.emit(str(e))
             return
         self.finished.emit(url)
+
+
+class CarverPhotoImportWorker(QObject):
+    finished = Signal(int, int, int)
+    failed = Signal(str)
+
+    def __init__(self, ssh, config_path, rows, local_cfg):
+        super().__init__()
+        self.ssh = ssh
+        self.config_path = config_path
+        self.rows = rows
+        self.local_cfg = local_cfg
+
+    def run(self):
+        from avito_studio.carver_photo_import import import_carver_photos
+        try:
+            found, added, preserved = import_carver_photos(
+                self.ssh, self.config_path, self.rows, self.local_cfg)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(found, added, preserved)
 
 
 class _BlockingWaiter(QObject):

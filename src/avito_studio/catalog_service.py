@@ -59,6 +59,10 @@ def fetch_catalog(ssh, local_cfg: LocalConfig,
     """ssh — любой объект с методом .run(cmd) -> str (см. SshClient).
     config_rel — YAML профиля для catalog_export (default: боевой кондиционерный)."""
     data = json.loads(ssh.run(export_cmd(config_rel)))
+    return _rows_from_data(data, local_cfg)
+
+
+def _rows_from_data(data: dict, local_cfg: LocalConfig) -> list[CatalogRow]:
     rows = []
     for g in data["series"]:
         rows.append(CatalogRow(
@@ -70,3 +74,14 @@ def fetch_catalog(ssh, local_cfg: LocalConfig,
             representative_nc=g["members"][0]["nc_code"] if g["members"] else "",
             price_range=_price_range_label(g["members"])))
     return rows
+
+
+def fetch_local_catalog(config_path, local_cfg: LocalConfig) -> list[CatalogRow]:
+    """Каталог локального XLS-профиля без предварительного деплоя прайса на VPS."""
+    from avito_bridge.catalog_export import build_catalog_json
+    from avito_bridge.config import load_config
+    from avito_bridge.ingest.sources import get_source
+
+    cfg = load_config(config_path)
+    offers = get_source(cfg.source)(cfg)
+    return _rows_from_data(build_catalog_json(offers, cfg), local_cfg)

@@ -148,6 +148,12 @@ class EditSeriesDialog(QDialog):
             url = upload_photo_blocking(self.ssh, self._new_photo_path,
                                         self.row.representative_nc, parent=self)
             self.local_cfg.set_manual_photo(self.row.representative_nc, url)
+            # Профиль бытовой техники стартует с защитным sentinel'ом: без фото не
+            # публикуется ничего. Ручное фото = явная готовность конкретной позиции.
+            if "__none__" in self.local_cfg.selected_series():
+                self.local_cfg.set_selected(self.row.key, True)
+                self.row.selected = True
+            self.row.has_card = True
         if self.utp_edit.toPlainText() != self._initial_utp_shown:
             # пишем override ТОЛЬКО при реальном изменении; очищенное поле = «вернуть автотекст»
             # (снимаем override, а не пишем пустую строку в config.yaml)

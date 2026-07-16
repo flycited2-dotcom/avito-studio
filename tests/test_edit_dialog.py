@@ -215,6 +215,30 @@ def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     assert reloaded.get_manual_photo("НС-2") == "https://splithome.ru/static/manual-photos/НС-2.jpg"
 
 
+def test_manual_photo_enables_row_in_safe_empty_profile(qtbot, tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "catalog:\n"
+        "  force_include: {}\n"
+        "  manual_photos: {}\n"
+        "  selected_series: [\"__none__\"]\n",
+        encoding="utf-8",
+    )
+    local_cfg = LocalConfig(cfg_path)
+    row = _row(forced=False, selected=False)
+    dlg = EditSeriesDialog(row, tmp_path, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    photo = tmp_path / "photo-safe.png"
+    Image.new("RGB", (4, 4), color="blue").save(photo)
+    dlg._new_photo_path = photo
+    monkeypatch.setattr("avito_studio.workers.upload_photo_blocking",
+                        lambda *a, **k: "https://splithome.ru/static/manual-photos/НС-2.jpg")
+    dlg.save()
+    reloaded = LocalConfig(cfg_path)
+    assert reloaded.is_selected(row.key)
+    assert row.selected is True and row.has_card is True
+
+
 def test_save_photo_upload_failure_raises_for_caller(qtbot, tmp_path):
     # ошибка загрузки должна долететь до main_window (там QMessageBox.critical), а не потеряться
     import pytest

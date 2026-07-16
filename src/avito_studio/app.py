@@ -10,10 +10,10 @@ from avito_studio.theme import apply_theme
 # Путь checkout'а avito-bridge на этой машине. В .exe (PyInstaller --onefile) __file__
 # указывает во временную распаковку (_MEIxxxxx), а не на реальные исходники на диске —
 # относительный расчёт "..от __file__.." там даёт мусорный путь. Поэтому во frozen-сборке
-# используем фиксированный абсолютный путь; при запуске из исходников — относительный (dev-режим).
-_FROZEN_BRIDGE_ROOT = Path(r"C:\Users\user\Documents\GitHub\Codex\Avito\avito-bridge")
+# используем путь текущего Windows-пользователя; при запуске из исходников — относительный.
+_FROZEN_BRIDGE_ROOT = Path.home() / "Documents" / "GitHub" / "Codex" / "Avito" / "avito-bridge"
 DEFAULT_SSH_HOST = "root@213.109.202.45"
-DEFAULT_SSH_KEY = str(Path.home() / ".ssh" / "climat_simf_deploy")
+DEFAULT_SSH_KEY = str(Path.home() / ".ssh" / "id_ritualb2b_admin")
 
 
 def default_bridge_root() -> Path:
@@ -29,7 +29,7 @@ def main() -> int:
     ssh = SshClient(host=DEFAULT_SSH_HOST, key_path=DEFAULT_SSH_KEY)
     win = MainWindow(bridge_root=bridge_root,
                      config_path=bridge_root / "config" / "config.yaml", ssh=ssh)
-    win.resize(1150, 680)
+    win.resize(1360, 820)
     win.show()
     QTimer.singleShot(200, win.refresh)   # каталог грузится сам — не заставляем жать «Обновить»
     return app.exec()

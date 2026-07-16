@@ -2,6 +2,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.main_window import MainWindow
+from avito_studio.profiles import PROFILES
 
 ROWS = [CatalogRow(key="a", source="breeze", brand="Funai", series="Sensei", sizes="7 тыс. BTU",
                    stock_total=2, has_card=True, forced=False, selected=False)]
@@ -33,6 +34,24 @@ def test_refresh_populates_table_synchronously(qtbot, tmp_path):
         win.refresh()
     assert win.model.rowCount() == 2
     assert win.model.rows[0].brand == "Funai"
+
+
+def test_dashboard_updates_counts_and_navigation(qtbot, tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
+    qtbot.addWidget(win)
+    assert win.pages.currentIndex() == 0
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    assert win.stat_total_value.text() == "2"
+    assert win.stat_selected_value.text() == "0"
+    assert win.stat_cards_value.text() == "1"
+    assert win.stat_issues_value.text() == "1"
+    win.nav_catalog.click()
+    assert win.pages.currentIndex() == 1
+    assert win.page_title.text() == "Каталог"
+    assert win.nav_catalog.isChecked()
 
 
 def test_toggle_checkbox_marks_dirty_and_updates_local_config(qtbot, tmp_path):
@@ -125,6 +144,21 @@ def test_publish_does_not_deploy_when_confirmation_declined(qtbot, tmp_path, mon
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
     win.publish()
     assert win._threads == []
+
+
+def test_carver_profile_blocks_publish_before_category_and_markup(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    win.profile = next(p for p in PROFILES if p.key == "carver")
+    win._set_busy(False)
+    shown = {"warning": False}
+    monkeypatch.setattr(QMessageBox, "warning",
+                        staticmethod(lambda *a, **k: shown.update(warning=True)))
+    win.publish()
+    assert shown["warning"] is True
+    assert win._threads == []
+    assert not win.act_publish.isEnabled()
+    assert win.act_import_cards.isEnabled()
+    assert win.act_import_cards.text() == "Взять фото из прайса"
 
 
 def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):

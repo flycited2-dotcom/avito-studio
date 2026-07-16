@@ -100,6 +100,11 @@ class LocalConfig:
     def set_manual_photo(self, nc_code: str, url: str) -> None:
         self.data["catalog"].setdefault("manual_photos", {})[nc_code] = DQ(url)
 
+    def remove_manual_photo(self, nc_code: str) -> None:
+        photos = self.data.get("catalog", {}).get("manual_photos")
+        if photos and nc_code in photos:
+            del photos[nc_code]
+
     def save(self) -> None:
         with self.path.open("w", encoding="utf-8", newline="\n") as f:
             _yaml.dump(self.data, f)
