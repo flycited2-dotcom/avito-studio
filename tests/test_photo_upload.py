@@ -1,5 +1,5 @@
 from PIL import Image
-from avito_studio.photo_upload import upload_manual_photo
+from avito_studio.photo_upload import upload_manual_photo, is_safe_nc_code
 
 
 class FakeSsh:
@@ -26,3 +26,9 @@ def test_upload_manual_photo_converts_to_jpeg_and_returns_public_url(tmp_path):
     assert remote_path == "/opt/oasis/staticfiles/manual-photos/НС-42.jpg"
     assert data[:2] == b"\xff\xd8"   # JPEG-магия — реально сконвертировано, не сырой PNG
     assert any("mkdir -p" in c for c in ssh.run_calls)
+
+
+def test_safe_nc_code_rejects_product_title_but_accepts_internal_code():
+    assert is_safe_nc_code("НС-1480532")
+    assert is_safe_nc_code("RC-GR28HN")
+    assert not is_safe_nc_code("Инвертор ROYAL CLIMA RC-GR28HN")

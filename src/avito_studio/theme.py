@@ -184,6 +184,7 @@ QStatusBar { background: #ffffff; border-top: 1px solid #d7e3eb; color: #60758d;
 QStatusBar[error="true"] { color: #c62828; font-weight: 600; }
 
 QLabel[hint="true"] { color: #77808c; }
+QLabel[fieldError="true"] { color: #c62828; font-size: 10px; }
 QMessageBox { background: #ffffff; }
 """
 

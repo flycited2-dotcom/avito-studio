@@ -7,10 +7,27 @@
 «Опубликовать» в главном окне уже разберётся с деплоем force_include/manual_photos/manual_card_brief."""
 from __future__ import annotations
 from pathlib import Path
+import re
 from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
                                QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit,
                                QFileDialog)
 from avito_studio.local_config import LocalConfig
+from avito_studio.photo_upload import is_safe_nc_code
+
+
+_MODEL_TOKEN = re.compile(r"\b[A-ZА-ЯЁ]{2,8}-[A-ZА-ЯЁ0-9./-]{3,}\b", re.IGNORECASE)
+_INTERNAL_NC = re.compile(r"^НС-\d+$", re.IGNORECASE)
+
+
+def model_hint(text: str) -> str | None:
+    """Достаёт модель из вставленного названия только для понятной подсказки пользователю."""
+    match = _MODEL_TOKEN.search(text or "")
+    return match.group(0) if match else None
+
+
+def is_internal_nc_code(value: str) -> bool:
+    """force_include для Oasis работает только с внутренним кодом каталога НС-<цифры>."""
+    return bool(value and _INTERNAL_NC.fullmatch(value.strip()) and is_safe_nc_code(value))
 
 
 class AddForcedProductDialog(QDialog):
@@ -27,8 +44,8 @@ class AddForcedProductDialog(QDialog):
         layout.setSpacing(10)
 
         hint = QLabel(
-            "Артикул поставщика (nc_code) — в основной таблице его не видно (там только бренд/серия).\n"
-            "Уточните артикул в Excel-каталоге поставщика или у товароведа перед вводом.")
+            "Нужен внутренний код поставщика вида НС-1480532 — не модель и не полное название.\n"
+            "По этому коду сервер находит точный товар, даже если его сейчас нет на складе.")
         hint.setWordWrap(True)
         hint.setProperty("hint", True)
         layout.addWidget(hint)
@@ -36,9 +53,17 @@ class AddForcedProductDialog(QDialog):
         form = QFormLayout()
 
         self.nc_field = QLineEdit()
-        self.nc_field.setPlaceholderText("напр. НС-1690797")
+        self.nc_field.setPlaceholderText("например: НС-1480532")
         self.nc_field.textChanged.connect(self._update_save_enabled)
-        form.addRow("Артикул поставщика:", self.nc_field)
+        nc_box = QVBoxLayout()
+        nc_box.setContentsMargins(0, 0, 0, 0)
+        nc_box.setSpacing(3)
+        nc_box.addWidget(self.nc_field)
+        self.nc_error = QLabel("")
+        self.nc_error.setWordWrap(True)
+        self.nc_error.setProperty("fieldError", True)
+        nc_box.addWidget(self.nc_error)
+        form.addRow("Внутренний код товара:", nc_box)
 
         self.price_field = QSpinBox()
         self.price_field.setRange(0, 10_000_000)
@@ -89,7 +114,17 @@ class AddForcedProductDialog(QDialog):
         layout.addLayout(buttons)
 
     def _update_save_enabled(self, text: str) -> None:
-        self.save_btn.setEnabled(bool(text.strip()))
+        nc_code = text.strip()
+        valid = is_internal_nc_code(nc_code)
+        self.save_btn.setEnabled(valid)
+        if nc_code and not valid:
+            model = model_hint(nc_code)
+            detail = (f" Распознана модель {model}, но нужен соответствующий код НС-…."
+                      if model else "")
+            self.nc_error.setText(
+                "Введите только внутренний код без пробелов и описания." + detail)
+        else:
+            self.nc_error.clear()
 
     def _choose_photo(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Выбрать фото", "", "Изображения (*.jpg *.jpeg *.png)")
@@ -98,6 +133,16 @@ class AddForcedProductDialog(QDialog):
             self.photo_label.setText(path)
 
     def _validate_and_accept(self) -> None:
+        nc_code = self.nc_field.text().strip()
+        if not is_internal_nc_code(nc_code):
+            model = model_hint(nc_code)
+            suffix = (f"\n\nВ названии распознана модель {model}. Найдите для неё "
+                      "внутренний код НС-… и вставьте только его."
+                      if model else "")
+            QMessageBox.warning(
+                self, "Нужен внутренний код товара",
+                "Нельзя использовать полное название как артикул." + suffix)
+            return
         if self.price_field.value() == 0:
             reply = QMessageBox.question(
                 self, "Цена не указана",
@@ -110,12 +155,22 @@ class AddForcedProductDialog(QDialog):
     def save(self) -> None:
         """Вызывается ПОСЛЕ exec()==Accepted (см. main_window._open_add_forced_dialog)."""
         nc = self.nc_field.text().strip()
-        self.local_cfg.add_force_include(nc, self.price_field.value(),
-                                         series=self.series_field.text().strip() or None)
+        if not is_internal_nc_code(nc):
+            raise ValueError(
+                "Внутренний код товара должен быть указан без пробелов и полного названия")
+
+        # Сначала выполняем единственную внешнюю операцию. Раньше force_include менялся ДО
+        # загрузки фото: при ошибке в памяти LocalConfig оставалась полузаписанная карточка.
+        photo_url = None
         if self._new_photo_path:
             from avito_studio.workers import upload_photo_blocking
-            url = upload_photo_blocking(self.ssh, self._new_photo_path, nc, parent=self)
-            self.local_cfg.set_manual_photo(nc, url)
+            photo_url = upload_photo_blocking(
+                self.ssh, self._new_photo_path, nc, parent=self)
+
+        self.local_cfg.add_force_include(nc, self.price_field.value(),
+                                         series=self.series_field.text().strip() or None)
+        if photo_url:
+            self.local_cfg.set_manual_photo(nc, photo_url)
         if self.utp_edit.toPlainText().strip():
             self.local_cfg.set_card_brief(nc, self.utp_edit.toPlainText())
         self.local_cfg.save()
