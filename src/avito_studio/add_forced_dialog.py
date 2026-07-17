@@ -9,9 +9,16 @@ import hashlib
 import re
 from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
                                QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit,
-                               QFileDialog, QTabWidget, QWidget, QComboBox, QCheckBox)
+                               QTabWidget, QWidget, QComboBox, QCheckBox, QScrollArea)
 from avito_studio.local_config import LocalConfig
 from avito_studio.photo_upload import is_safe_nc_code
+from avito_studio.ui_components import (
+    FormSection,
+    dialog_footer,
+    dialog_header,
+    get_open_file_name,
+    role_button,
+)
 
 
 _MODEL_TOKEN = re.compile(r"\b[A-ZА-ЯЁ]{2,8}-[A-ZА-ЯЁ0-9./-]{3,}\b", re.IGNORECASE)
@@ -45,20 +52,48 @@ class AddForcedProductDialog(QDialog):
         self.ssh = ssh
         self._new_photo_path: Path | None = None
         self.setWindowTitle("Добавить товар вручную")
-        self.resize(640, 650)
+        self.resize(760, 760)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        self.dialog_page = QWidget(self, objectName="dialogPage")
+        shell.addWidget(self.dialog_page)
+        page_layout = QVBoxLayout(self.dialog_page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+        page_layout.addWidget(
+            dialog_header(
+                "Добавить товар вручную",
+                "Добавьте позицию из каталога поставщика или создайте новую карточку без кода.",
+                parent=self.dialog_page,
+            )
+        )
+
+        scroll = QScrollArea(self.dialog_page)
+        scroll.setWidgetResizable(True)
+        body = QWidget(scroll)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(22, 18, 22, 18)
+        body_layout.setSpacing(14)
+
+        mode_section = FormSection(
+            "Способ добавления",
+            "Выберите сценарий — набор обязательных полей изменится автоматически.",
+            body,
+        )
 
         self.hint = QLabel()
         self.hint.setWordWrap(True)
-        self.hint.setProperty("hint", True)
-        layout.addWidget(self.hint)
+        self.hint.setObjectName("helperText")
+        mode_section.content_layout.addWidget(self.hint)
 
         self.tabs = QTabWidget()
         existing_tab = QWidget()
         form = QFormLayout(existing_tab)
+        form.setContentsMargins(16, 16, 16, 16)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(11)
 
         self.nc_field = QLineEdit()
         self.nc_field.setPlaceholderText("например: НС-1480532")
@@ -86,6 +121,9 @@ class AddForcedProductDialog(QDialog):
 
         manual_tab = QWidget()
         manual_form = QFormLayout(manual_tab)
+        manual_form.setContentsMargins(16, 16, 16, 16)
+        manual_form.setHorizontalSpacing(16)
+        manual_form.setVerticalSpacing(11)
         self.manual_brand_field = QLineEdit()
         self.manual_brand_field.setPlaceholderText("например: ROYAL CLIMA")
         manual_form.addRow("Бренд*:", self.manual_brand_field)
@@ -111,7 +149,8 @@ class AddForcedProductDialog(QDialog):
         self.manual_inverter_box = QCheckBox("Инверторный компрессор")
         manual_form.addRow("Исполнение:", self.manual_inverter_box)
         self.tabs.addTab(manual_tab, "Товара нет в базе")
-        layout.addWidget(self.tabs)
+        mode_section.content_layout.addWidget(self.tabs)
+        body_layout.addWidget(mode_section)
 
         for field in (self.manual_brand_field, self.manual_title_field,
                       self.manual_series_field):
@@ -120,38 +159,55 @@ class AddForcedProductDialog(QDialog):
         self.manual_price_field.valueChanged.connect(self._update_save_enabled)
         self.tabs.currentChanged.connect(self._on_mode_changed)
 
+        media_section = FormSection(
+            "Фото и содержание карточки",
+            "Для нового товара без кода фотография обязательна. Для товара с НС-кодом — по желанию.",
+            body,
+        )
         photo_row = QHBoxLayout()
+        photo_row.setSpacing(10)
         self.photo_label = QLabel("(нет фото)")
-        self.photo_btn = QPushButton("Выбрать файл…")
+        self.photo_label.setObjectName("photoFileName")
+        self.photo_label.setWordWrap(True)
+        self.photo_btn = role_button("Выбрать файл…", "secondary")
         self.photo_btn.clicked.connect(self._choose_photo)
-        photo_row.addWidget(self.photo_label)
+        photo_row.addWidget(self.photo_label, 1)
         photo_row.addWidget(self.photo_btn)
-        layout.addLayout(photo_row)
+        photo_form = QFormLayout()
+        photo_form.setHorizontalSpacing(16)
+        photo_form.setVerticalSpacing(11)
+        photo_form.addRow("Фото товара:", photo_row)
+        media_section.content_layout.addLayout(photo_form)
 
-        layout.addWidget(QLabel("УТП/характеристики для карточки (необязательно):"))
+        utp_label = QLabel(
+            "УТП/характеристики для карточки (необязательно)", objectName="fieldLabel"
+        )
+        media_section.content_layout.addWidget(utp_label)
         self.utp_edit = QTextEdit()
         self.utp_edit.setPlaceholderText(
             "Оставьте пустым — фотоагент возьмёт стандартный текст после публикации.")
-        self.utp_edit.setMaximumHeight(80)
-        layout.addWidget(self.utp_edit)
+        self.utp_edit.setMinimumHeight(82)
+        self.utp_edit.setMaximumHeight(110)
+        media_section.content_layout.addWidget(self.utp_edit)
 
         self.note = QLabel()
         self.note.setWordWrap(True)
-        self.note.setProperty("hint", True)
-        layout.addWidget(self.note)
+        self.note.setObjectName("helperText")
+        media_section.content_layout.addWidget(self.note)
+        body_layout.addWidget(media_section)
+        body_layout.addStretch(1)
+        scroll.setWidget(body)
+        page_layout.addWidget(scroll, 1)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        self.save_btn = QPushButton("Добавить")
-        self.save_btn.setProperty("accent", True)
+        self.save_btn = role_button("Добавить товар", "primary")
         self.save_btn.setDefault(True)
         self.save_btn.setEnabled(False)
         self.save_btn.clicked.connect(self._validate_and_accept)
-        cancel_btn = QPushButton("Отмена")
-        cancel_btn.clicked.connect(self.reject)
-        buttons.addWidget(cancel_btn)
-        buttons.addWidget(self.save_btn)
-        layout.addLayout(buttons)
+        self.cancel_btn = role_button("Отмена", "secondary")
+        self.cancel_btn.clicked.connect(self.reject)
+        page_layout.addWidget(
+            dialog_footer([self.cancel_btn, self.save_btn], parent=self.dialog_page)
+        )
         self._on_mode_changed(0)
 
     def _manual_mode(self) -> bool:
@@ -192,7 +248,9 @@ class AddForcedProductDialog(QDialog):
             self.nc_error.clear()
 
     def _choose_photo(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Выбрать фото", "", "Изображения (*.jpg *.jpeg *.png)")
+        path, _ = get_open_file_name(
+            self, "Выбрать фото", "", "Изображения (*.jpg *.jpeg *.png)"
+        )
         if path:
             self._new_photo_path = Path(path)
             self.photo_label.setText(path)

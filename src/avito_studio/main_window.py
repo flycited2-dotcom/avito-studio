@@ -293,6 +293,13 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(act_add)
         toolbar.addAction(act_status)
+        # Та же иерархия действий, что в карточках и диалогах.
+        publish_button = toolbar.widgetForAction(act_publish)
+        add_button = toolbar.widgetForAction(act_add)
+        if publish_button:
+            publish_button.setProperty("role", "primary")
+        if add_button:
+            add_button.setProperty("role", "secondary")
         layout.addWidget(toolbar)
 
         filters = QFrame(objectName="filterCard")

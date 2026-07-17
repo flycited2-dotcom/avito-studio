@@ -152,6 +152,8 @@ def upload_photo_blocking(ssh, local_path, nc_code: str, parent=None) -> str:
     from PySide6.QtCore import QEventLoop, Qt
     from PySide6.QtWidgets import QProgressDialog
     progress = QProgressDialog("Загрузка фото на сервер…", "", 0, 0, parent)
+    progress.setObjectName("dialogPage")
+    progress.setMinimumWidth(420)
     progress.setCancelButton(None)   # отмена на полпути оставила бы файл на сервере без записи в config
     progress.setWindowTitle("Загрузка")
     progress.setWindowModality(Qt.WindowModal)

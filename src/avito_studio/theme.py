@@ -113,6 +113,19 @@ QToolButton {
 }
 QToolButton:hover { background: #e9f4fb; border-color: #bcdced; }
 QToolButton:pressed { background: #dceef8; }
+QToolButton[role="primary"] {
+    color: #ffffff;
+    border: none;
+    font-weight: 700;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #3288eb, stop:1 #22b9c5);
+}
+QToolButton[role="primary"]:hover { background: #258fd1; }
+QToolButton[role="secondary"] {
+    background: #ffffff;
+    color: #2c4159;
+    border: 1px solid #cedce8;
+}
 QToolButton:disabled { color: #a6adb8; }
 QToolButton#cardActionButton {
     text-align: left;
@@ -185,7 +198,166 @@ QStatusBar[error="true"] { color: #c62828; font-weight: 600; }
 
 QLabel[hint="true"] { color: #77808c; }
 QLabel[fieldError="true"] { color: #c62828; font-size: 10px; }
-QMessageBox { background: #ffffff; }
+
+/* Shared dialog shell ---------------------------------------------------- */
+QDialog {
+    background: #edf6fb;
+    color: #14263f;
+}
+QWidget#dialogPage {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #eaf3ff, stop:1 #e7f8f8);
+}
+QFrame#dialogHeader {
+    background: rgba(250, 253, 255, 248);
+    border: none;
+    border-bottom: 1px solid #d5e3ed;
+}
+QLabel#dialogBadge {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #3189ee, stop:1 #20b8c5);
+    color: #ffffff;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#dialogTitle { color: #14263f; font-size: 20px; font-weight: 700; }
+QLabel#dialogSubtitle { color: #6d8198; font-size: 11px; }
+QFrame#dialogCard, QFrame#formSection {
+    background: rgba(255, 255, 255, 248);
+    border: 1px solid #d5e2eb;
+    border-radius: 13px;
+}
+QLabel#sectionTitle { color: #162b45; font-size: 14px; font-weight: 700; }
+QLabel#sectionSubtitle, QLabel#helperText { color: #6f839a; font-size: 10px; }
+QLabel#fieldLabel { color: #344b65; font-size: 11px; font-weight: 600; }
+QLabel#photoFileName { color: #60758d; font-size: 10px; }
+QLabel#successText { color: #1a7f37; font-weight: 600; }
+QLabel#errorText { color: #c62828; font-weight: 600; }
+QFrame#dialogFooter {
+    background: rgba(250, 253, 255, 248);
+    border: none;
+    border-top: 1px solid #d5e3ed;
+}
+
+/* Button roles. Existing objectName/property selectors remain supported. */
+QPushButton[role="primary"] {
+    color: #ffffff;
+    border: none;
+    font-weight: 700;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #3288eb, stop:1 #22b9c5);
+}
+QPushButton[role="primary"]:hover { background: #258fd1; }
+QPushButton[role="primary"]:pressed { background: #207eb9; }
+QPushButton[role="primary"]:disabled { color: #ffffff; background: #a8cfdf; }
+QPushButton[role="secondary"] {
+    background: #ffffff;
+    color: #2c4159;
+    border: 1px solid #cedce8;
+}
+QPushButton[role="secondary"]:hover {
+    background: #edf6fb;
+    border-color: #a9d2e7;
+}
+QPushButton[role="ghost"] { background: transparent; border-color: transparent; }
+QPushButton[role="ghost"]:hover { background: #e8f3fb; }
+QPushButton[role="success"] {
+    background: #1b9d71;
+    color: #ffffff;
+    border: none;
+    font-weight: 700;
+}
+QPushButton[role="success"]:hover { background: #178861; }
+QPushButton[role="danger"] {
+    background: #fff1f1;
+    color: #b42323;
+    border: 1px solid #f1c6c6;
+    font-weight: 650;
+}
+QPushButton[role="danger"]:hover { background: #ffe3e3; border-color: #eaa8a8; }
+
+/* Tabs are a segmented mode switch rather than a native grey notebook. */
+QTabWidget::pane {
+    background: rgba(255, 255, 255, 248);
+    border: 1px solid #d5e2eb;
+    border-radius: 12px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #e8f2f8;
+    color: #60758d;
+    border: 1px solid #d5e2eb;
+    border-bottom: none;
+    padding: 10px 18px;
+    margin-right: 3px;
+    min-width: 130px;
+    font-weight: 600;
+}
+QTabBar::tab:first { border-top-left-radius: 9px; }
+QTabBar::tab:last { border-top-right-radius: 9px; }
+QTabBar::tab:hover { background: #dff0f8; color: #29445f; }
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #187fae;
+    border-color: #b9dce9;
+    font-weight: 700;
+}
+
+QCheckBox { color: #344b65; spacing: 8px; }
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    background: #ffffff;
+    border: 1px solid #bfcfdd;
+    border-radius: 5px;
+}
+QCheckBox::indicator:hover { border-color: #2d9fe5; background: #f0f9fd; }
+QCheckBox::indicator:checked { background: #2d9fe5; border: 2px solid #187fae; }
+QCheckBox::indicator:disabled { background: #eef1f3; border-color: #d8dfe5; }
+
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical {
+    background: #bfd2df;
+    border-radius: 4px;
+    min-height: 28px;
+}
+QScrollBar::handle:vertical:hover { background: #9cbacb; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+
+/* Secondary modal surfaces used by the forms. */
+QProgressDialog, QMessageBox, QFileDialog { background: #edf6fb; color: #14263f; }
+QProgressDialog QLabel, QMessageBox QLabel { color: #243b55; min-width: 260px; }
+QProgressBar {
+    background: #dce9f1;
+    border: none;
+    border-radius: 5px;
+    min-height: 10px;
+    max-height: 10px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    border-radius: 5px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #3288eb, stop:1 #22b9c5);
+}
+QMessageBox QPushButton, QProgressDialog QPushButton { min-width: 96px; }
+QFileDialog QTreeView, QFileDialog QListView {
+    background: #ffffff;
+    alternate-background-color: #f6fbfd;
+    border: 1px solid #d5e2eb;
+    border-radius: 9px;
+    selection-background-color: #dff2fb;
+    selection-color: #1b2430;
+}
+QFileDialog QToolButton {
+    background: #ffffff;
+    border: 1px solid #d5e2eb;
+    border-radius: 8px;
+}
 """
 
 
