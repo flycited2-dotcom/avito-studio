@@ -1,7 +1,7 @@
 import io
 import tarfile
 from pathlib import Path
-from avito_studio.deploy import deploy_and_rebuild
+from avito_studio.deploy import deploy_and_rebuild, deploy_local_feed
 
 
 class FakeSsh:
@@ -66,3 +66,45 @@ def test_deploy_without_profiles_dir_still_works(tmp_path):
     ssh = FakeSsh()
     out = deploy_and_rebuild(bridge_root, ssh)
     assert out == "ok\n"
+
+
+def test_deploy_local_feed_builds_and_uploads_profile_xml(tmp_path, monkeypatch):
+    price = tmp_path / "carver.xlsx"
+    price.write_bytes(b"not-read")
+    cfg = tmp_path / "carver.yaml"
+    cfg.write_text(
+        "profile:\n"
+        "  name: carver\n"
+        "  source: carver_xlsx\n"
+        "  grouping: per_item\n"
+        "  feed_path: feed_out/carver.xml\n"
+        f"  source_options: {{path: '{price.as_posix()}'}}\n"
+        "cities:\n"
+        "  - {id: simferopol, name: Симферополь, avito_location: Симферополь}\n"
+        "pricing: {rounding: none, default_markup_pct: 10, min_margin_abs: 0, rules: []}\n"
+        "feed:\n"
+        "  max_active_ads: 10\n"
+        "  base_tags: {Category: 'Для дома и дачи', GoodsType: 'Садовая техника', Condition: 'Новое'}\n"
+        "content: {title_max: 50, description_max: 7000, stop_words: [], description_attr: desc_long}\n"
+        "catalog:\n"
+        "  manual_photos: {PPG-1900IS: 'https://example.test/ppg.jpg'}\n"
+        "  selected_series: ['carver_xlsx|item|carver:PPG-1900IS']\n"
+        "cards: {enabled: false}\n",
+        encoding="utf-8",
+    )
+    import avito_bridge.ingest.carver_xlsx as carver
+    monkeypatch.setattr(carver, "parse_carver_xlsx", lambda path: [{
+        "row": 4, "article": "PPG-1900IS", "model": "PPG-1900IS",
+        "name": "Генератор CARVER PPG-1900IS", "characteristics": "Мощность: 2 кВт",
+        "price": 10000.0, "kind": "generator",
+    }])
+
+    ssh = FakeSsh()
+    out = deploy_local_feed(cfg, ssh)
+
+    assert "profile=carver" in out
+    assert "ads_built=1" in out
+    assert ssh.run_calls == ["mkdir -p /opt/avito-bridge/feed_out"]
+    remote_path, data = ssh.put_calls[0]
+    assert remote_path == "/opt/avito-bridge/feed_out/carver.xml"
+    assert b"<Ads" in data and b"PPG-1900IS" in data

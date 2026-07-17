@@ -146,7 +146,7 @@ def test_publish_does_not_deploy_when_confirmation_declined(qtbot, tmp_path, mon
     assert win._threads == []
 
 
-def test_carver_profile_blocks_publish_before_category_and_markup(qtbot, tmp_path, monkeypatch):
+def test_carver_profile_shows_readiness_check_before_publish(qtbot, tmp_path, monkeypatch):
     win = _win(qtbot, tmp_path)
     win.profile = next(p for p in PROFILES if p.key == "carver")
     win._set_busy(False)
@@ -156,7 +156,7 @@ def test_carver_profile_blocks_publish_before_category_and_markup(qtbot, tmp_pat
     win.publish()
     assert shown["warning"] is True
     assert win._threads == []
-    assert not win.act_publish.isEnabled()
+    assert win.act_publish.isEnabled()
     assert win.act_import_cards.isEnabled()
     assert win.act_import_cards.text() == "Взять фото из прайса"
 

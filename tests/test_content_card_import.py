@@ -100,10 +100,9 @@ def test_appliances_profile_is_local_and_available_in_selector():
     assert profile.local_catalog is True
 
 
-def test_carver_profile_is_local_but_publish_blocked():
+def test_carver_profile_is_local_and_checked_before_publish():
     profile = next(p for p in PROFILES if p.key == "carver")
     assert profile.label == "Генераторы CARVER"
     assert profile.config_rel == "profiles/carver.yaml"
     assert profile.local_catalog is True
-    assert profile.publish_enabled is False
-    assert "наценку" in profile.publish_block_reason
+    assert profile.publish_enabled is True

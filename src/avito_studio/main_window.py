@@ -459,6 +459,15 @@ class MainWindow(QMainWindow):
         # галочки «Публикуется» сохраняем локально ДО сводки — иначе их не будет в списке;
         # локальная запись безвредна (диалоги и так пишут локально, публикация — отдельный шаг)
         self.save_local_selection()
+        if self.profile.key == "carver":
+            from avito_studio.carver_readiness import carver_publish_issues
+            issues = carver_publish_issues(self.config_path, self.model.rows)
+            if issues:
+                QMessageBox.warning(
+                    self, "CARVER ещё не готов к публикации",
+                    "Перед отправкой генераторов на Avito нужно закрыть пункты:\n\n"
+                    + "\n".join(f"• {issue}" for issue in issues))
+                return
         reply = QMessageBox.question(
             self, "Опубликовать изменения?", self._publish_question(),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -466,7 +475,9 @@ class MainWindow(QMainWindow):
             return
         self._set_busy(True)
         self._status("Публикация на сервер (может занять до минуты)…")
-        worker = DeployWorker(self.bridge_root, self.ssh)
+        worker = DeployWorker(
+            self.bridge_root, self.ssh, config_path=self.config_path,
+            local_feed=self.profile.local_catalog)
         self._threads.append(run_in_thread(worker, self._on_publish_ok, self._on_publish_error))
 
     def _on_publish_ok(self, output: str):

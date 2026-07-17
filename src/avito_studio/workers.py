@@ -31,15 +31,20 @@ class DeployWorker(QObject):
     finished = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, bridge_root, ssh):
+    def __init__(self, bridge_root, ssh, config_path=None, local_feed: bool = False):
         super().__init__()
         self.bridge_root = bridge_root
         self.ssh = ssh
+        self.config_path = config_path
+        self.local_feed = local_feed
 
     def run(self):
-        from avito_studio.deploy import deploy_and_rebuild
+        from avito_studio.deploy import deploy_and_rebuild, deploy_local_feed
         try:
-            out = deploy_and_rebuild(self.bridge_root, self.ssh)
+            if self.local_feed:
+                out = deploy_local_feed(self.config_path, self.ssh)
+            else:
+                out = deploy_and_rebuild(self.bridge_root, self.ssh)
         except Exception as e:
             self.failed.emit(str(e))
             return

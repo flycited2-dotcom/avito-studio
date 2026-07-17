@@ -19,7 +19,5 @@ PROFILES: list[Profile] = [
     Profile("conditioners", "Кондиционеры", "config/config.yaml"),
     Profile("wreaths", "Венки", "profiles/wreaths.yaml"),
     Profile("appliances", "Бытовая техника", "profiles/appliances.yaml", local_catalog=True),
-    Profile("carver", "Генераторы CARVER", "profiles/carver.yaml", local_catalog=True,
-            publish_enabled=False,
-            publish_block_reason="Сначала подтвердите наценку и категорию Avito для генераторов."),
+    Profile("carver", "Генераторы CARVER", "profiles/carver.yaml", local_catalog=True),
 ]
