@@ -133,6 +133,7 @@ class LocalConfig:
         return {
             "category": str(base_tags.get("Category", "") or ""),
             "goods_type": str(base_tags.get("GoodsType", "") or ""),
+            "goods_subtype": str(base_tags.get("GoodsSubType", "") or ""),
             "markup_pct": float(pricing.get("default_markup_pct", 0) or 0),
             "rounding": str(pricing.get("rounding", "none") or "none"),
             "price_confirmed": bool(pricing.get("price_confirmed", False)),
@@ -143,6 +144,7 @@ class LocalConfig:
         *,
         category: str,
         goods_type: str,
+        goods_subtype: str,
         markup_pct: float,
         rounding: str,
         price_confirmed: bool,
@@ -155,6 +157,7 @@ class LocalConfig:
             feed["base_tags"] = base_tags
         base_tags["Category"] = DQ(category.strip())
         base_tags["GoodsType"] = DQ(goods_type.strip())
+        base_tags["GoodsSubType"] = DQ(goods_subtype.strip())
 
         pricing = self.data.setdefault("pricing", CommentedMap())
         normalized_markup = round(float(markup_pct), 1)
@@ -164,6 +167,19 @@ class LocalConfig:
         )
         pricing["rounding"] = DQ(rounding)
         pricing["price_confirmed"] = bool(price_confirmed)
+
+    def get_source_path(self) -> str:
+        profile = self.data.get("profile", {}) or {}
+        options = profile.get("source_options", {}) or {}
+        return str(options.get("path", "") or "")
+
+    def set_source_path(self, path: Path) -> None:
+        profile = self.data.setdefault("profile", CommentedMap())
+        options = profile.get("source_options")
+        if not isinstance(options, dict):
+            options = CommentedMap()
+            profile["source_options"] = options
+        options["path"] = DQ(str(Path(path).resolve()))
 
     def save(self) -> None:
         with self.path.open("w", encoding="utf-8", newline="\n") as f:

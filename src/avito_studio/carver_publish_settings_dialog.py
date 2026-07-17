@@ -1,12 +1,15 @@
 """One-time, user-facing setup of the CARVER Avito feed."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QScrollArea,
@@ -15,7 +18,14 @@ from PySide6.QtWidgets import (
 )
 
 from avito_studio.local_config import LocalConfig
-from avito_studio.ui_components import FormSection, dialog_footer, dialog_header, role_button
+from avito_studio.carver_price_file import import_carver_price
+from avito_studio.ui_components import (
+    FormSection,
+    dialog_footer,
+    dialog_header,
+    get_open_file_name,
+    role_button,
+)
 
 
 ROUNDING_OPTIONS = (
@@ -57,6 +67,22 @@ class CarverPublishSettingsDialog(QDialog):
         body_layout.setContentsMargins(22, 18, 22, 18)
         body_layout.setSpacing(14)
 
+        source_section = FormSection(
+            "Прайс CARVER",
+            "Выбранный Excel сначала проверяется, затем копируется в локальное хранилище приложения.",
+            body,
+        )
+        source_row = QHBoxLayout()
+        self.price_path_input = QLineEdit(local_cfg.get_source_path())
+        self.price_path_input.setReadOnly(True)
+        self.price_path_input.setPlaceholderText("Выберите прайс Excel со встроенными фото")
+        source_row.addWidget(self.price_path_input, 1)
+        self.choose_price_btn = role_button("Выбрать Excel", "secondary")
+        self.choose_price_btn.clicked.connect(self._choose_price_file)
+        source_row.addWidget(self.choose_price_btn)
+        source_section.content_layout.addLayout(source_row)
+        body_layout.addWidget(source_section)
+
         category_section = FormSection(
             "Категория Avito",
             "Эти значения добавятся в каждое объявление генератора. Укажите точные названия из формата Автозагрузки вашего аккаунта.",
@@ -71,6 +97,9 @@ class CarverPublishSettingsDialog(QDialog):
         self.goods_type_input = QLineEdit(values["goods_type"])
         self.goods_type_input.setPlaceholderText("например: Садовая техника")
         category_form.addRow("Вид товара*:", self.goods_type_input)
+        self.goods_subtype_input = QLineEdit(values["goods_subtype"])
+        self.goods_subtype_input.setPlaceholderText("например: Генераторы")
+        category_form.addRow("Подвид товара*:", self.goods_subtype_input)
         category_section.content_layout.addLayout(category_form)
         note = QLabel(
             "Приложение не подбирает категорию по названию вслепую: неверное значение Avito отклоняет. "
@@ -147,13 +176,38 @@ class CarverPublishSettingsDialog(QDialog):
                 "Публикация останется заблокированной, пока не укажете наценку или не подтвердите цену прайса."
             )
 
+    def _choose_price_file(self) -> None:
+        selected, _ = get_open_file_name(
+            self,
+            "Выбрать прайс CARVER",
+            self.price_path_input.text(),
+            "Excel (*.xlsx)",
+        )
+        if not selected:
+            return
+        try:
+            bridge_root = self.local_cfg.path.resolve().parent.parent
+            target, count = import_carver_price(Path(selected), bridge_root)
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Прайс не принят", str(exc))
+            return
+        self.price_path_input.setText(str(target))
+        self.pricing_hint.setText(f"Прайс проверен: {count} позиций и встроенные фото найдены.")
+
     def _validate_and_accept(self) -> None:
-        if not self.category_input.text().strip() or not self.goods_type_input.text().strip():
+        if not self.price_path_input.text().strip():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Выберите прайс", "Сначала выберите и проверьте Excel CARVER.")
+            return
+        if (not self.category_input.text().strip()
+                or not self.goods_type_input.text().strip()
+                or not self.goods_subtype_input.text().strip()):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self,
                 "Заполните категорию",
-                "Для Автозагрузки нужны и категория, и вид товара Avito.",
+                "Для Автозагрузки нужны категория, вид и подвид товара Avito.",
             )
             return
         if self.markup_input.value() <= 0 and not self.price_confirmed.isChecked():
@@ -171,8 +225,11 @@ class CarverPublishSettingsDialog(QDialog):
         self.local_cfg.set_publication_settings(
             category=self.category_input.text(),
             goods_type=self.goods_type_input.text(),
+            goods_subtype=self.goods_subtype_input.text(),
             markup_pct=self.markup_input.value(),
             rounding=str(self.rounding_combo.currentData()),
             price_confirmed=self.price_confirmed.isChecked(),
         )
+        if self.price_path_input.text().strip():
+            self.local_cfg.set_source_path(Path(self.price_path_input.text()))
         self.local_cfg.save()

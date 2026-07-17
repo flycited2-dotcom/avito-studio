@@ -11,6 +11,9 @@ def _config(path):
         "  default_markup_pct: 0\n"
         "  min_margin_abs: 0\n"
         "  rules: []\n"
+        "profile:\n"
+        "  source_options:\n"
+        "    path: ''\n"
         "feed:\n"
         "  base_tags:\n"
         "    AdType: 'Товар приобретен на продажу'\n"
@@ -31,6 +34,8 @@ def test_carver_settings_dialog_saves_category_and_markup(qtbot, tmp_path):
     qtbot.addWidget(dlg)
     dlg.category_input.setText("Для дома и дачи")
     dlg.goods_type_input.setText("Садовая техника")
+    dlg.goods_subtype_input.setText("Генераторы")
+    dlg.price_path_input.setText(str(tmp_path / "runtime" / "current.xlsx"))
     dlg.markup_input.setValue(12.5)
     dlg.rounding_combo.setCurrentIndex(dlg.rounding_combo.findData("up_to_90"))
     dlg.save()
@@ -39,10 +44,12 @@ def test_carver_settings_dialog_saves_category_and_markup(qtbot, tmp_path):
     assert saved == {
         "category": "Для дома и дачи",
         "goods_type": "Садовая техника",
+        "goods_subtype": "Генераторы",
         "markup_pct": 12.5,
         "rounding": "up_to_90",
         "price_confirmed": False,
     }
+    assert LocalConfig(path).get_source_path() == str(tmp_path / "runtime" / "current.xlsx")
 
 
 def test_carver_zero_markup_can_be_explicitly_confirmed(qtbot, tmp_path):
