@@ -354,7 +354,8 @@ Run the same `get_source` plus `run_cycle` path used by `deploy_local_feed` into
 Expected assertions:
 
 ```text
-offers_in=23
+source offers parsed=23
+offers_in=1 after the one-item whitelist
 ads_built=1
 PPG-1900IS present
 Price=24390
