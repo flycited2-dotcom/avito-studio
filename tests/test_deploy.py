@@ -1,7 +1,9 @@
 import io
 import tarfile
 from pathlib import Path
-from avito_studio.deploy import deploy_and_rebuild, deploy_local_feed
+import pytest
+
+from avito_studio.deploy import deploy_and_rebuild, deploy_local_feed, validate_feed_xml
 
 
 class FakeSsh:
@@ -78,6 +80,7 @@ def test_deploy_local_feed_builds_and_uploads_profile_xml(tmp_path, monkeypatch)
         "  source: carver_xlsx\n"
         "  grouping: per_item\n"
         "  feed_path: feed_out/carver.xml\n"
+        "  public_feed_path: /opt/oasis/staticfiles/avito-feed-carver.xml\n"
         f"  source_options: {{path: '{price.as_posix()}'}}\n"
         "cities:\n"
         "  - {id: simferopol, name: Симферополь, avito_location: Симферополь}\n"
@@ -104,7 +107,51 @@ def test_deploy_local_feed_builds_and_uploads_profile_xml(tmp_path, monkeypatch)
 
     assert "profile=carver" in out
     assert "ads_built=1" in out
-    assert ssh.run_calls == ["mkdir -p /opt/avito-bridge/feed_out"]
+    assert ssh.run_calls[0] == "mkdir -p /opt/oasis/staticfiles"
+    assert "xml.etree.ElementTree" in ssh.run_calls[1]
+    assert "&& mv -f" in ssh.run_calls[1]
+    assert "/opt/oasis/staticfiles/avito-feed-carver.xml" in ssh.run_calls[1]
     remote_path, data = ssh.put_calls[0]
-    assert remote_path == "/opt/avito-bridge/feed_out/carver.xml"
+    assert remote_path == "/opt/oasis/staticfiles/.avito-feed-carver.xml.tmp"
     assert b"<Ads" in data and b"PPG-1900IS" in data
+
+
+def test_validate_feed_rejects_zero_ads():
+    with pytest.raises(ValueError, match="объявлен"):
+        validate_feed_xml(b"<Ads></Ads>", expected_ads=1)
+
+
+def test_validate_feed_rejects_missing_required_field():
+    data = (
+        b'<Ads><Ad><Id>x</Id><Title>x</Title><Description>x</Description>'
+        b'<Price>1</Price><Images /></Ad></Ads>'
+    )
+    with pytest.raises(ValueError, match="Images/Image"):
+        validate_feed_xml(data, expected_ads=1)
+
+
+def test_deploy_local_feed_rejects_non_public_destination(tmp_path, monkeypatch):
+    cfg = tmp_path / "unsafe.yaml"
+    cfg.write_text(
+        "profile:\n"
+        "  name: carver\n"
+        "  source: carver_xlsx\n"
+        "  grouping: per_item\n"
+        "  public_feed_path: /tmp/carver.xml\n"
+        "  source_options: {path: ignored.xlsx}\n"
+        "cities: []\n"
+        "pricing: {rounding: none}\n"
+        "feed: {}\n"
+        "content: {}\n"
+        "catalog: {}\n"
+        "cards: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("avito_studio.deploy.get_source", lambda source: lambda loaded: [])
+    monkeypatch.setattr(
+        "avito_studio.deploy.run_cycle",
+        lambda *args, **kwargs: type("Result", (), {"offers_in": 0, "ads_built": 0, "skipped": 0})(),
+    )
+
+    with pytest.raises(ValueError, match="публичного фида"):
+        deploy_local_feed(cfg, FakeSsh())
