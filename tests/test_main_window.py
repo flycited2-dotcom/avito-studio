@@ -161,6 +161,15 @@ def test_carver_profile_shows_readiness_check_before_publish(qtbot, tmp_path, mo
     assert win.act_import_cards.text() == "Взять фото из прайса"
 
 
+def test_carver_settings_action_is_only_visible_for_carver(qtbot, tmp_path):
+    win = _win(qtbot, tmp_path)
+    assert not win.act_carver_settings.isVisible()
+    win.profile = next(p for p in PROFILES if p.key == "carver")
+    win._set_busy(False)
+    assert win.act_carver_settings.isVisible()
+    assert win.act_carver_settings.isEnabled()
+
+
 def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):
     win = _win(qtbot, tmp_path)
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))

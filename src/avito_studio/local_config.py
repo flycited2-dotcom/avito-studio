@@ -119,6 +119,52 @@ class LocalConfig:
         if photos and nc_code in photos:
             del photos[nc_code]
 
+    def get_publication_settings(self) -> dict:
+        """Return the editable Avito publication settings of the active profile.
+
+        The settings intentionally live next to the feed/pricing settings in the
+        profile YAML.  This keeps them profile-specific (CARVER cannot inherit a
+        conditioner category by accident) while the GUI remains the single place
+        a user needs to edit them.
+        """
+        feed = self.data.get("feed", {}) or {}
+        base_tags = feed.get("base_tags", {}) or {}
+        pricing = self.data.get("pricing", {}) or {}
+        return {
+            "category": str(base_tags.get("Category", "") or ""),
+            "goods_type": str(base_tags.get("GoodsType", "") or ""),
+            "markup_pct": float(pricing.get("default_markup_pct", 0) or 0),
+            "rounding": str(pricing.get("rounding", "none") or "none"),
+            "price_confirmed": bool(pricing.get("price_confirmed", False)),
+        }
+
+    def set_publication_settings(
+        self,
+        *,
+        category: str,
+        goods_type: str,
+        markup_pct: float,
+        rounding: str,
+        price_confirmed: bool,
+    ) -> None:
+        """Persist category and pricing choices made in the publication dialog."""
+        feed = self.data.setdefault("feed", CommentedMap())
+        base_tags = feed.get("base_tags")
+        if not isinstance(base_tags, dict):
+            base_tags = CommentedMap()
+            feed["base_tags"] = base_tags
+        base_tags["Category"] = DQ(category.strip())
+        base_tags["GoodsType"] = DQ(goods_type.strip())
+
+        pricing = self.data.setdefault("pricing", CommentedMap())
+        normalized_markup = round(float(markup_pct), 1)
+        pricing["default_markup_pct"] = (
+            int(normalized_markup)
+            if normalized_markup.is_integer() else normalized_markup
+        )
+        pricing["rounding"] = DQ(rounding)
+        pricing["price_confirmed"] = bool(price_confirmed)
+
     def save(self) -> None:
         with self.path.open("w", encoding="utf-8", newline="\n") as f:
             _yaml.dump(self.data, f)

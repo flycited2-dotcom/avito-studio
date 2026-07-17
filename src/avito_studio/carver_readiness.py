@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from avito_bridge.config import load_config
 
 
@@ -25,7 +27,10 @@ def carver_publish_issues(config_path: Path, rows) -> list[str]:
         issues.append("Заполните тип товара Avito: GoodsType или product_type_default.")
 
     pricing = cfg.pricing
-    if pricing.default_markup_pct <= 0 and pricing.min_margin_abs <= 0 and not pricing.rules:
+    raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+    price_confirmed = bool((raw.get("pricing", {}) or {}).get("price_confirmed", False))
+    if (pricing.default_markup_pct <= 0 and pricing.min_margin_abs <= 0 and not pricing.rules
+            and not price_confirmed):
         issues.append("Подтвердите розничную наценку: сейчас профиль публикует по закупочной цене.")
 
     photos = cfg.catalog.manual_photos or {}

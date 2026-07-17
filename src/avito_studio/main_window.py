@@ -77,6 +77,9 @@ class MainWindow(QMainWindow):
                                    "Обновить каталог", self.refresh)
         self.act_publish = self._action(style.standardIcon(QStyle.SP_DialogApplyButton),
                                         "Опубликовать изменения", self.publish)
+        self.act_carver_settings = self._action(
+            style.standardIcon(QStyle.SP_FileDialogDetailedView),
+            "Настроить публикацию", self._open_carver_publish_settings)
         act_add = self._action(style.standardIcon(QStyle.SP_FileDialogNewFolder),
                                "Добавить товар", self._open_add_forced_dialog)
         act_status = self._action(style.standardIcon(QStyle.SP_MessageBoxInformation),
@@ -109,6 +112,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Нажмите «Обновить», чтобы загрузить каталог с сервера")
 
         self._threads = []   # держим ссылки, чтобы QThread не собрался раньше времени
+        self._set_busy(False)
         self._show_page(0)
         self._update_dashboard([])
 
@@ -232,6 +236,10 @@ class MainWindow(QMainWindow):
             act_refresh, "Обновить товары", "Цена, остаток, фото и статусы"))
         actions.addWidget(self._action_card(
             self.act_publish, "Опубликовать", "Проверка изменений перед отправкой"))
+        self.carver_settings_card = self._action_card(
+            self.act_carver_settings, "Настроить CARVER", "Категория, тип товара и розничная цена")
+        self.carver_settings_card.setVisible(False)
+        actions.addWidget(self.carver_settings_card)
         layout.addLayout(actions)
 
         catalog_card = QFrame(objectName="panelCard")
@@ -289,17 +297,21 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.addAction(self.act_import_cards)
         toolbar.addAction(act_refresh)
+        toolbar.addAction(self.act_carver_settings)
         toolbar.addAction(act_publish)
         toolbar.addSeparator()
         toolbar.addAction(act_add)
         toolbar.addAction(act_status)
         # Та же иерархия действий, что в карточках и диалогах.
         publish_button = toolbar.widgetForAction(act_publish)
+        settings_button = toolbar.widgetForAction(self.act_carver_settings)
         add_button = toolbar.widgetForAction(act_add)
         if publish_button:
             publish_button.setProperty("role", "primary")
         if add_button:
             add_button.setProperty("role", "secondary")
+        if settings_button:
+            settings_button.setProperty("role", "secondary")
         layout.addWidget(toolbar)
 
         filters = QFrame(objectName="filterCard")
@@ -371,6 +383,11 @@ class MainWindow(QMainWindow):
         self.act_import_cards.setText(
             "Взять фото из прайса" if self.profile.key == "carver"
             else "Взять фото из Контент-завода")
+        carver_active = self.profile.key == "carver"
+        self.act_carver_settings.setVisible(carver_active)
+        self.act_carver_settings.setEnabled(not busy and carver_active)
+        if hasattr(self, "carver_settings_card"):
+            self.carver_settings_card.setVisible(carver_active)
         if self.profile.publish_enabled:
             self.act_publish.setToolTip("")
         else:
@@ -535,6 +552,27 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Добавлено",
                                 "Товар добавлен локально.\nНажмите «Обновить», затем «Опубликовать изменения», "
                                 "чтобы он появился на Avito.")
+
+    def _open_carver_publish_settings(self) -> None:
+        """Open the one-time profile setup without publishing anything externally."""
+        if self.profile.key != "carver":
+            return
+        from avito_studio.carver_publish_settings_dialog import CarverPublishSettingsDialog
+        dlg = CarverPublishSettingsDialog(self.local_cfg, parent=self)
+        if not dlg.exec():
+            return
+        try:
+            dlg.save()
+        except Exception as exc:
+            QMessageBox.critical(self, "Настройки не сохранены", str(exc))
+            return
+        self._status("Настройки CARVER сохранены. Теперь обновите каталог и выберите позиции.", 7000)
+        QMessageBox.information(
+            self,
+            "Настройка CARVER сохранена",
+            "Категория и расчёт цены сохранены для профиля CARVER.\n\n"
+            "Дальше: обновите каталог, отметьте позиции, загрузите фото из прайса и публикуйте фид.",
+        )
 
     def _import_content_cards(self) -> None:
         """Точные карточки МБТ/КБТ → ручные фото профиля; внешней публикации здесь нет."""
