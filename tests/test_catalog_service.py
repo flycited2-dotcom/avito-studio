@@ -1,5 +1,5 @@
 import json
-from avito_studio.catalog_service import fetch_catalog, CatalogRow
+from avito_studio.catalog_service import fetch_catalog, CatalogMember, CatalogRow
 from avito_studio.local_config import LocalConfig
 
 FIXTURE_CFG = """\
@@ -14,8 +14,8 @@ FAKE_JSON = json.dumps({
         {"key": "breeze|funai|sensei 2.0", "source": "breeze", "brand": "Funai",
          "series": "Sensei 2.0", "category_id": 2, "stock_total": 5, "has_card": True,
          "forced": False, "members": [{"nc_code": "НС-1", "btu_calc": 7, "stock": 2,
-         "price": 25990, "price_ok": True, "forced": False},
-         {"nc_code": "НС-2", "btu_calc": 9, "stock": 3, "price": 27990,
+         "cost": 24000, "price": 25990, "price_ok": True, "forced": False},
+         {"nc_code": "НС-2", "btu_calc": 9, "stock": 3, "cost": 26000, "price": 27990,
           "price_ok": True, "forced": False}]},
         {"key": "daichi|midea|изи", "source": "daichi", "brand": "Midea", "series": "Изи",
          "category_id": 2, "stock_total": 1, "has_card": False, "forced": False,
@@ -51,6 +51,10 @@ def test_fetch_catalog_merges_remote_json_with_local_selection(tmp_path):
     assert "catalog_export" in ssh.calls[0]
     assert sensei.representative_nc == "НС-1"          # первый член = репрезентативный (младший размер)
     assert sensei.price_range == "25990–27990 ₽"
+    assert sensei.members == (
+        CatalogMember("НС-1", 25990, 24000, True, False),
+        CatalogMember("НС-2", 27990, 26000, True, False),
+    )
     assert izy.price_range == "19990 ₽"
 
 
