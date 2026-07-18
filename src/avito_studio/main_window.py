@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 from pathlib import Path
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel
 from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit, QStyle,
@@ -84,9 +85,14 @@ class MainWindow(QMainWindow):
                                "Добавить товар", self._open_add_forced_dialog)
         act_status = self._action(style.standardIcon(QStyle.SP_MessageBoxInformation),
                                   "Статусы Avito", self._refresh_avito_status)
+        self.act_bulk_edit = self._action(
+            style.standardIcon(QStyle.SP_FileDialogListView),
+            "Массовое изменение", self._open_bulk_edit_dialog)
+        self.act_bulk_edit.setShortcut("Ctrl+Shift+B")
         # пока идёт фоновая операция — все действия выключены (повторный клик по «Опубликовать»
         # иначе запустил бы ВТОРОЙ параллельный деплой на боевой сервер)
-        self._busy_actions = [act_refresh, self.act_publish, act_add, act_status]
+        self._busy_actions = [
+            act_refresh, self.act_publish, act_add, act_status, self.act_bulk_edit]
         self.act_import_cards.setEnabled(False)
 
         central = QWidget(objectName="appShell")
@@ -298,6 +304,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_import_cards)
         toolbar.addAction(act_refresh)
         toolbar.addAction(self.act_carver_settings)
+        toolbar.addAction(self.act_bulk_edit)
         toolbar.addAction(act_publish)
         toolbar.addSeparator()
         toolbar.addAction(act_add)
@@ -543,6 +550,50 @@ class MainWindow(QMainWindow):
         self._status("Серия сохранена локально (для сервера — «Опубликовать»)", 5000)
         QMessageBox.information(self, "Сохранено",
                                 "Серия сохранена локально.\nЧтобы изменения ушли на Avito — «Опубликовать изменения».")
+
+    def _open_bulk_edit_dialog(self) -> None:
+        from avito_studio.bulk_edit_dialog import BulkEditDialog
+
+        dialog = BulkEditDialog(self.model.rows, self.local_cfg, parent=self)
+        dialog.applied.connect(self._on_bulk_applied)
+        dialog.exec()
+
+    def _on_bulk_applied(self, preview) -> None:
+        selection_updates = {
+            change.key: change.new_selected for change in preview.series_changes}
+        price_updates = {
+            change.nc_code: change.new_price
+            for change in preview.price_changes
+            if change.new_price is not None
+        }
+        for row in self.model.rows:
+            if row.key in selection_updates:
+                row.selected = selection_updates[row.key]
+            if price_updates:
+                row.members = tuple(
+                    replace(member, current_price=price_updates[member.nc_code])
+                    if member.nc_code in price_updates else member
+                    for member in row.members
+                )
+                prices = sorted(
+                    member.current_price for member in row.members
+                    if member.price_ok and member.current_price is not None
+                )
+                if prices:
+                    row.price_range = (
+                        f"{prices[0]} ₽" if len(set(prices)) == 1
+                        else f"{prices[0]}–{prices[-1]} ₽")
+        if self.model.rows:
+            top_left = self.model.index(0, 0)
+            bottom_right = self.model.index(
+                self.model.rowCount() - 1, self.model.columnCount() - 1)
+            self.model.dataChanged.emit(top_left, bottom_right)
+        self._update_dashboard(self.model.rows)
+        self._status(
+            f"Сохранено локально: публикация {len(preview.series_changes)}, "
+            f"цены {len(preview.price_changes)}. Для отправки нажмите «Опубликовать изменения».",
+            8000,
+        )
 
     def _open_add_forced_dialog(self) -> None:
         from avito_studio.add_forced_dialog import AddForcedProductDialog

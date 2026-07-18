@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 from avito_studio.catalog_service import CatalogRow
+from avito_studio.bulk_changes import BulkPreview, MemberPriceChange, SeriesChange
 from avito_studio.main_window import MainWindow
 from avito_studio.profiles import PROFILES
 
@@ -168,6 +169,48 @@ def test_carver_settings_action_is_only_visible_for_carver(qtbot, tmp_path):
     win._set_busy(False)
     assert win.act_carver_settings.isVisible()
     assert win.act_carver_settings.isEnabled()
+
+
+def test_bulk_action_is_available_for_every_profile_and_has_shortcut(qtbot, tmp_path):
+    win = _win(qtbot, tmp_path)
+    for profile in PROFILES:
+        win.profile = profile
+        win._set_busy(False)
+        assert win.act_bulk_edit.isVisible()
+        assert win.act_bulk_edit.isEnabled()
+    assert win.act_bulk_edit.shortcut().toString() == "Ctrl+Shift+B"
+
+
+def test_bulk_dialog_result_updates_catalog_without_deploy(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path, catalog_yaml=(
+        "catalog:\n"
+        "  force_include: {}\n"
+        "  manual_photos: {}\n"
+        "  selected_series:\n"
+        "    - \"a\"\n"
+    ))
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    from avito_studio.bulk_edit_dialog import BulkEditDialog
+
+    preview = BulkPreview(
+        series_changes=(SeriesChange("a", True, False),),
+        price_changes=(MemberPriceChange("a", "1", 100, 95, False),),
+    )
+
+    def emit_preview(dialog):
+        dialog.applied.emit(preview)
+        return 1
+
+    monkeypatch.setattr(BulkEditDialog, "exec", emit_preview)
+    thread_count = len(win._threads)
+
+    win._open_bulk_edit_dialog()
+
+    assert win.model.rows[0].selected is False
+    assert win.model.rows[0].price_range == "95 ₽"
+    assert win.stat_selected_value.text() == "0"
+    assert len(win._threads) == thread_count
 
 
 def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):
