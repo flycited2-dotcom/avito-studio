@@ -95,6 +95,25 @@ def test_bulk_actions_expose_keyboard_shortcuts(qtbot, tmp_path):
     assert set(dialog.selected_keys()) == {"jet", "aura"}
 
 
+def test_percent_shortcut_defers_focus_until_combo_change_finishes(
+        qtbot, tmp_path, monkeypatch):
+    import avito_studio.bulk_edit_dialog as dialog_module
+
+    dialog = _dialog(qtbot, tmp_path)
+    scheduled = []
+    monkeypatch.setattr(
+        dialog_module.QTimer,
+        "singleShot",
+        staticmethod(lambda delay, callback: scheduled.append((delay, callback))),
+    )
+
+    dialog._focus_percent_value()
+
+    assert dialog.price_mode_combo.currentData() == "percent"
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 0
+
+
 def test_percent_preview_shows_each_price_and_floor_skip(qtbot, tmp_path):
     dialog = _dialog(qtbot, tmp_path)
     dialog.products_table.item(0, 0).setCheckState(Qt.Checked)

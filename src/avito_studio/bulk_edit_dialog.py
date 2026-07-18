@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -191,7 +191,10 @@ class BulkEditDialog(QDialog):
 
     def _focus_percent_value(self) -> None:
         self.price_mode_combo.setCurrentIndex(self.price_mode_combo.findData("percent"))
-        self.price_value_input.setFocus()
+        QTimer.singleShot(0, self._focus_price_value)
+
+    def _focus_price_value(self) -> None:
+        self.price_value_input.setFocus(Qt.ShortcutFocusReason)
         self.price_value_input.selectAll()
 
     def _populate_products(self) -> None:
