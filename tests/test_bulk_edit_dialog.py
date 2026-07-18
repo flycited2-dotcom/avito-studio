@@ -116,3 +116,32 @@ def test_cancelled_confirmation_does_not_change_yaml(qtbot, tmp_path, monkeypatc
 
     assert dialog.local_cfg.path.read_text(encoding="utf-8") == before
     assert dialog.result() == 0
+
+
+def test_save_failure_is_reported_without_closing_dialog(qtbot, tmp_path, monkeypatch):
+    import avito_studio.bulk_edit_dialog as dialog_module
+
+    dialog = _dialog(qtbot, tmp_path)
+    dialog.products_table.item(0, 0).setCheckState(Qt.Checked)
+    dialog.publication_combo.setCurrentIndex(dialog.publication_combo.findData("off"))
+    shown = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *args, **kwargs: QMessageBox.Yes),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        staticmethod(lambda *args, **kwargs: shown.append(args[2])),
+    )
+    monkeypatch.setattr(
+        dialog_module,
+        "apply_bulk_preview",
+        lambda *args: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    dialog.apply_btn.click()
+
+    assert shown == ["disk full"]
+    assert dialog.result() == 0

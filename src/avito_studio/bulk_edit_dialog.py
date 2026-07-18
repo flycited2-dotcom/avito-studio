@@ -308,7 +308,7 @@ class BulkEditDialog(QDialog):
             return
         try:
             apply_bulk_preview(self.local_cfg, self.preview)
-        except ValueError as exc:
+        except Exception as exc:
             QMessageBox.critical(self, "Изменения не сохранены", str(exc))
             return
         self.applied.emit(self.preview)
