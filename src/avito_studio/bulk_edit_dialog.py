@@ -126,6 +126,18 @@ class BulkEditDialog(QDialog):
         self.price_value_input.setSingleStep(1)
         self.price_value_input.setEnabled(False)
         operation_row.addWidget(self.price_value_input)
+        self.price_minus_five_btn = role_button("−5%", "ghost")
+        self.price_plus_five_btn = role_button("+5%", "ghost")
+        self.price_minus_five_btn.setShortcut("Alt+D")
+        self.price_plus_five_btn.setShortcut("Alt+U")
+        self.price_minus_five_btn.setToolTip("Быстрая скидка 5% (Alt+D)")
+        self.price_plus_five_btn.setToolTip("Быстрая наценка 5% (Alt+U)")
+        self.price_minus_five_btn.clicked.connect(
+            lambda: self._set_percent_value(-5))
+        self.price_plus_five_btn.clicked.connect(
+            lambda: self._set_percent_value(5))
+        operation_row.addWidget(self.price_minus_five_btn)
+        operation_row.addWidget(self.price_plus_five_btn)
         operation_row.addStretch(1)
         operation.content_layout.addLayout(operation_row)
         body_layout.addWidget(operation)
@@ -192,6 +204,10 @@ class BulkEditDialog(QDialog):
     def _focus_percent_value(self) -> None:
         self.price_mode_combo.setCurrentIndex(self.price_mode_combo.findData("percent"))
         QTimer.singleShot(0, self._focus_price_value)
+
+    def _set_percent_value(self, value: float) -> None:
+        self.price_mode_combo.setCurrentIndex(self.price_mode_combo.findData("percent"))
+        self.price_value_input.setValue(value)
 
     def _focus_price_value(self) -> None:
         self.price_value_input.setFocus(Qt.ShortcutFocusReason)

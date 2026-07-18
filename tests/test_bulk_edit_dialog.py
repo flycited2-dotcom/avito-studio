@@ -84,6 +84,8 @@ def test_bulk_actions_expose_keyboard_shortcuts(qtbot, tmp_path):
     assert dialog.select_filtered_btn.shortcut().toString() == "Alt+S"
     assert dialog.select_published_btn.shortcut().toString() == "Alt+P"
     assert dialog.clear_selection_btn.shortcut().toString() == "Alt+C"
+    assert dialog.price_minus_five_btn.shortcut().toString() == "Alt+D"
+    assert dialog.price_plus_five_btn.shortcut().toString() == "Alt+U"
     assert dialog.apply_btn.shortcut().toString() == "Ctrl+Return"
     assert {shortcut.key().toString() for shortcut in dialog._shortcuts} == {
         "Ctrl+F", "Alt+O", "Alt+I", "Alt+5",
@@ -93,6 +95,10 @@ def test_bulk_actions_expose_keyboard_shortcuts(qtbot, tmp_path):
     dialog.search_input.clear()
     dialog.select_published_btn.click()
     assert set(dialog.selected_keys()) == {"jet", "aura"}
+
+    dialog.price_minus_five_btn.click()
+    assert dialog.price_mode_combo.currentData() == "percent"
+    assert dialog.price_value_input.value() == -5
 
 
 def test_percent_shortcut_defers_focus_until_combo_change_finishes(
