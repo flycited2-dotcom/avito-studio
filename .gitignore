@@ -6,3 +6,4 @@ dist/
 *.spec.bak
 *.egg-info/
 .pytest_cache/
+.worktrees/
