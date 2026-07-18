@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -73,6 +74,9 @@ class BulkEditDialog(QDialog):
         self.select_filtered_btn = role_button("Выбрать найденные", "secondary")
         self.select_published_btn = role_button("Выбрать публикуемые", "secondary")
         self.clear_selection_btn = role_button("Снять выбор", "ghost")
+        self.select_filtered_btn.setShortcut("Alt+S")
+        self.select_published_btn.setShortcut("Alt+P")
+        self.clear_selection_btn.setShortcut("Alt+C")
         search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.select_filtered_btn)
         search_row.addWidget(self.select_published_btn)
@@ -145,6 +149,7 @@ class BulkEditDialog(QDialog):
         layout.addWidget(body, 1)
 
         self.apply_btn = role_button("Применить локально", "primary")
+        self.apply_btn.setShortcut("Ctrl+Return")
         self.apply_btn.setEnabled(False)
         self.apply_btn.setDefault(False)
         cancel_btn = role_button("Отмена", "secondary")
@@ -160,6 +165,29 @@ class BulkEditDialog(QDialog):
         self.publication_combo.currentIndexChanged.connect(self._refresh_preview)
         self.price_mode_combo.currentIndexChanged.connect(self._price_mode_changed)
         self.price_value_input.valueChanged.connect(self._refresh_preview)
+        self._shortcuts = [
+            self._shortcut("Ctrl+F", self._focus_search),
+            self._shortcut("Alt+O", lambda: self._set_publication("off")),
+            self._shortcut("Alt+I", lambda: self._set_publication("on")),
+            self._shortcut("Alt+5", self._focus_percent_value),
+        ]
+
+    def _shortcut(self, key: str, slot) -> QShortcut:
+        shortcut = QShortcut(QKeySequence(key), self)
+        shortcut.activated.connect(slot)
+        return shortcut
+
+    def _focus_search(self) -> None:
+        self.search_input.setFocus()
+        self.search_input.selectAll()
+
+    def _set_publication(self, value: str) -> None:
+        self.publication_combo.setCurrentIndex(self.publication_combo.findData(value))
+
+    def _focus_percent_value(self) -> None:
+        self.price_mode_combo.setCurrentIndex(self.price_mode_combo.findData("percent"))
+        self.price_value_input.setFocus()
+        self.price_value_input.selectAll()
 
     def _populate_products(self) -> None:
         self.products_table.blockSignals(True)
@@ -188,12 +216,20 @@ class BulkEditDialog(QDialog):
 
     def _filter_products(self, text: str) -> None:
         needle = text.strip().casefold()
+        exact = needle.startswith("=")
+        if exact:
+            needle = needle[1:].strip()
         for row in range(self.products_table.rowCount()):
+            identity = " ".join(
+                self.products_table.item(row, column).text()
+                for column in (1, 2)
+            ).casefold()
             haystack = " ".join(
                 self.products_table.item(row, column).text()
                 for column in range(1, 5)
             ).casefold()
-            self.products_table.setRowHidden(row, bool(needle and needle not in haystack))
+            matches = identity == needle if exact else needle in haystack
+            self.products_table.setRowHidden(row, bool(needle and not matches))
 
     def _set_checked(self, predicate) -> None:
         self.products_table.blockSignals(True)

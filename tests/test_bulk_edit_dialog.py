@@ -63,6 +63,32 @@ def test_search_can_accumulate_targets_and_select_published_rows(qtbot, tmp_path
     dialog.select_filtered_btn.click()
     assert set(dialog.selected_keys()) == {"jet", "aura"}
 
+
+def test_exact_search_does_not_include_similarly_named_series(qtbot, tmp_path):
+    rows = [
+        _row("jet", "XIGMA", "JETPRO", selected=True),
+        _row("jet-inverter", "XIGMA", "JETPRO Inverter", selected=False),
+    ]
+    dialog = BulkEditDialog(rows, _cfg(tmp_path))
+    qtbot.addWidget(dialog)
+
+    dialog.search_input.setText("=XIGMA JETPRO")
+    dialog.select_filtered_btn.click()
+
+    assert dialog.selected_keys() == ("jet",)
+
+
+def test_bulk_actions_expose_keyboard_shortcuts(qtbot, tmp_path):
+    dialog = _dialog(qtbot, tmp_path)
+
+    assert dialog.select_filtered_btn.shortcut().toString() == "Alt+S"
+    assert dialog.select_published_btn.shortcut().toString() == "Alt+P"
+    assert dialog.clear_selection_btn.shortcut().toString() == "Alt+C"
+    assert dialog.apply_btn.shortcut().toString() == "Ctrl+Return"
+    assert {shortcut.key().toString() for shortcut in dialog._shortcuts} == {
+        "Ctrl+F", "Alt+O", "Alt+I", "Alt+5",
+    }
+
     dialog.clear_selection_btn.click()
     dialog.search_input.clear()
     dialog.select_published_btn.click()
