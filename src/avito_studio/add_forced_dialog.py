@@ -9,9 +9,18 @@ import hashlib
 import re
 from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
                                QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit,
-                               QTabWidget, QWidget, QComboBox, QCheckBox, QScrollArea)
+                               QTabWidget, QWidget, QComboBox, QCheckBox, QScrollArea,
+                               QDoubleSpinBox, QTableWidget, QTableWidgetItem)
 from avito_studio.local_config import LocalConfig
+from avito_studio.manual_product_forms import (
+    FieldSpec,
+    appliance_groups,
+    form_spec,
+    serialize_manual_product,
+    suggested_characteristics,
+)
 from avito_studio.photo_upload import is_safe_nc_code
+from avito_studio.profiles import PROFILES, Profile
 from avito_studio.ui_components import (
     FormSection,
     dialog_footer,
@@ -46,10 +55,13 @@ def make_manual_id(brand: str, title: str, series: str) -> str:
 
 
 class AddForcedProductDialog(QDialog):
-    def __init__(self, local_cfg: LocalConfig, ssh, parent=None):
+    def __init__(self, local_cfg: LocalConfig, ssh,
+                 profile: Profile = PROFILES[0], parent=None):
         super().__init__(parent)
         self.local_cfg = local_cfg
         self.ssh = ssh
+        self.profile = profile
+        self.form_spec = form_spec(profile.key)
         self._new_photo_path: Path | None = None
         self.setWindowTitle("Добавить товар вручную")
         self.resize(760, 760)
@@ -86,6 +98,10 @@ class AddForcedProductDialog(QDialog):
         self.hint = QLabel()
         self.hint.setWordWrap(True)
         self.hint.setObjectName("helperText")
+        self.profile_banner = QLabel(f"Активный профиль: <b>{profile.label}</b>")
+        self.profile_banner.setObjectName("profileContext")
+        self.profile_banner.setWordWrap(True)
+        mode_section.content_layout.addWidget(self.profile_banner)
         mode_section.content_layout.addWidget(self.hint)
 
         self.tabs = QTabWidget()
@@ -117,7 +133,8 @@ class AddForcedProductDialog(QDialog):
         self.series_field = QLineEdit()
         self.series_field.setPlaceholderText("необязательно — своё объявление, а не общая серия")
         form.addRow("Имя серии:", self.series_field)
-        self.tabs.addTab(existing_tab, "Есть НС-код")
+        if self.form_spec.allow_nc_code:
+            self.tabs.addTab(existing_tab, "Есть НС-код")
 
         manual_tab = QWidget()
         manual_form = QFormLayout(manual_tab)
@@ -125,39 +142,73 @@ class AddForcedProductDialog(QDialog):
         manual_form.setHorizontalSpacing(16)
         manual_form.setVerticalSpacing(11)
         self.manual_brand_field = QLineEdit()
+        self.manual_brand_field.setText(self.form_spec.brand_default)
         self.manual_brand_field.setPlaceholderText("например: ROYAL CLIMA")
         manual_form.addRow("Бренд*:", self.manual_brand_field)
         self.manual_title_field = QLineEdit()
-        self.manual_title_field.setPlaceholderText("например: RCI-GR28HN")
+        self.manual_title_field.setPlaceholderText("модель или полное название товара")
         manual_form.addRow("Модель / название*:", self.manual_title_field)
         self.manual_series_field = QLineEdit()
-        self.manual_series_field.setPlaceholderText("например: GRIDA DC EU")
-        manual_form.addRow("Серия*:", self.manual_series_field)
-        self.manual_category_combo = QComboBox()
-        self.manual_category_combo.addItem("Настенная сплит-система", 2)
-        self.manual_category_combo.addItem("Полупромышленный кондиционер", 6)
-        self.manual_category_combo.addItem("Мобильный кондиционер", 7)
-        manual_form.addRow("Тип товара*:", self.manual_category_combo)
-        self.manual_btu_field = QSpinBox()
-        self.manual_btu_field.setRange(0, 100)
-        self.manual_btu_field.setSuffix(" тыс. BTU")
-        manual_form.addRow("Типоразмер*:", self.manual_btu_field)
+        self.manual_series_field.setPlaceholderText("серия или линейка — если есть")
+        manual_form.addRow("Серия*:" if self.form_spec.series_required else "Серия / линейка:",
+                           self.manual_series_field)
+
+        self.profile_fields: dict[str, QWidget] = {}
+        for field in self.form_spec.fields:
+            widget = self._create_profile_field(field)
+            self.profile_fields[field.key] = widget
+            label = field.label + ("*:" if field.required else ":")
+            manual_form.addRow(label, widget)
+
         self.manual_price_field = QSpinBox()
         self.manual_price_field.setRange(0, 10_000_000)
         self.manual_price_field.setSuffix(" ₽")
         manual_form.addRow("Финальная цена*:", self.manual_price_field)
-        self.manual_inverter_box = QCheckBox("Инверторный компрессор")
-        manual_form.addRow("Исполнение:", self.manual_inverter_box)
-        self.tabs.addTab(manual_tab, "Товара нет в базе")
+        self.manual_stock_field = QSpinBox()
+        self.manual_stock_field.setRange(1, 100_000)
+        self.manual_stock_field.setValue(1)
+        manual_form.addRow("Количество*:", self.manual_stock_field)
+
+        characteristics = QWidget()
+        characteristics_layout = QVBoxLayout(characteristics)
+        characteristics_layout.setContentsMargins(0, 0, 0, 0)
+        characteristics_layout.setSpacing(6)
+        self.characteristics_table = QTableWidget(0, 2)
+        self.characteristics_table.setObjectName("characteristicsTable")
+        self.characteristics_table.setHorizontalHeaderLabels(["Характеристика", "Значение"])
+        self.characteristics_table.horizontalHeader().setStretchLastSection(True)
+        self.characteristics_table.setMinimumHeight(150)
+        characteristics_layout.addWidget(self.characteristics_table)
+        characteristic_buttons = QHBoxLayout()
+        self.add_characteristic_btn = role_button("+ Добавить строку", "secondary")
+        self.remove_characteristic_btn = role_button("Удалить строку", "secondary")
+        self.add_characteristic_btn.clicked.connect(self._add_characteristic_row)
+        self.remove_characteristic_btn.clicked.connect(self._remove_characteristic_row)
+        characteristic_buttons.addWidget(self.add_characteristic_btn)
+        characteristic_buttons.addWidget(self.remove_characteristic_btn)
+        characteristic_buttons.addStretch(1)
+        characteristics_layout.addLayout(characteristic_buttons)
+        manual_form.addRow("Характеристики:", characteristics)
+
+        self._manual_tab_index = self.tabs.addTab(
+            manual_tab, "Товара нет в базе" if self.form_spec.allow_nc_code else "Новый товар")
         mode_section.content_layout.addWidget(self.tabs)
         body_layout.addWidget(mode_section)
+
+        self.manual_category_combo = self.profile_fields.get("product_type")
+        self.manual_btu_field = self.profile_fields.get("btu")
+        self.manual_inverter_box = self.profile_fields.get("inverter")
 
         for field in (self.manual_brand_field, self.manual_title_field,
                       self.manual_series_field):
             field.textChanged.connect(self._update_save_enabled)
-        self.manual_btu_field.valueChanged.connect(self._update_save_enabled)
         self.manual_price_field.valueChanged.connect(self._update_save_enabled)
+        self.manual_stock_field.valueChanged.connect(self._update_save_enabled)
+        for key, widget in self.profile_fields.items():
+            self._connect_profile_field(key, widget)
+        self.characteristics_table.itemChanged.connect(self._update_save_enabled)
         self.tabs.currentChanged.connect(self._on_mode_changed)
+        self._seed_characteristics()
 
         media_section = FormSection(
             "Фото и содержание карточки",
@@ -210,8 +261,123 @@ class AddForcedProductDialog(QDialog):
         )
         self._on_mode_changed(0)
 
+    def _create_profile_field(self, field: FieldSpec) -> QWidget:
+        if field.kind == "combo":
+            widget = QComboBox()
+            choices = field.choices
+            if self.profile.key == "appliances" and field.key == "group":
+                choices = tuple((value, value) for value in appliance_groups(self.local_cfg))
+            if not choices:
+                choices = (("Нет доступных вариантов", ""),)
+            for label, value in choices:
+                widget.addItem(label, value)
+            return widget
+        if field.kind == "int":
+            widget = QSpinBox()
+            widget.setRange(0, 1_000_000)
+            widget.setSuffix(field.suffix)
+            return widget
+        if field.kind == "float":
+            widget = QDoubleSpinBox()
+            widget.setRange(0, 1_000_000)
+            widget.setDecimals(2)
+            widget.setSingleStep(0.1)
+            widget.setSuffix(field.suffix)
+            return widget
+        if field.kind == "bool":
+            return QCheckBox("Инверторный компрессор" if field.key == "inverter" else field.label)
+        widget = QLineEdit()
+        if field.default:
+            widget.setText(str(field.default))
+        return widget
+
+    def _connect_profile_field(self, key: str, widget: QWidget) -> None:
+        if isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(
+                self._on_appliance_group_changed if key == "group"
+                else self._update_save_enabled)
+        elif isinstance(widget, QLineEdit):
+            widget.textChanged.connect(self._update_save_enabled)
+        elif isinstance(widget, QCheckBox):
+            widget.toggled.connect(self._update_save_enabled)
+        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            widget.valueChanged.connect(self._update_save_enabled)
+
+    def _add_characteristic_row(self, name: str = "", value: str = "") -> None:
+        row = self.characteristics_table.rowCount()
+        self.characteristics_table.insertRow(row)
+        self.characteristics_table.setItem(row, 0, QTableWidgetItem(name))
+        self.characteristics_table.setItem(row, 1, QTableWidgetItem(value))
+
+    def _remove_characteristic_row(self) -> None:
+        row = self.characteristics_table.currentRow()
+        if row < 0:
+            row = self.characteristics_table.rowCount() - 1
+        if row >= 0:
+            self.characteristics_table.removeRow(row)
+        self._update_save_enabled()
+
+    def _seed_characteristics(self) -> None:
+        group = ""
+        group_widget = self.profile_fields.get("group")
+        if isinstance(group_widget, QComboBox):
+            group = str(group_widget.currentData() or "")
+        existing = {
+            (self.characteristics_table.item(row, 0).text() if
+             self.characteristics_table.item(row, 0) else "").strip().casefold()
+            for row in range(self.characteristics_table.rowCount())
+        }
+        self.characteristics_table.blockSignals(True)
+        try:
+            for name in suggested_characteristics(self.profile.key, group):
+                if name.casefold() not in existing:
+                    self._add_characteristic_row(name)
+        finally:
+            self.characteristics_table.blockSignals(False)
+
+    def _on_appliance_group_changed(self, *_args) -> None:
+        self._seed_characteristics()
+        self._update_save_enabled()
+
+    def _profile_values(self) -> dict:
+        values = {}
+        for key, widget in self.profile_fields.items():
+            if isinstance(widget, QComboBox):
+                values[key] = widget.currentData()
+            elif isinstance(widget, QCheckBox):
+                values[key] = widget.isChecked()
+            elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                values[key] = widget.value()
+            elif isinstance(widget, QLineEdit):
+                values[key] = widget.text().strip()
+        return values
+
+    def _characteristic_rows(self) -> list[tuple[str, str]]:
+        rows = []
+        for row in range(self.characteristics_table.rowCount()):
+            name_item = self.characteristics_table.item(row, 0)
+            value_item = self.characteristics_table.item(row, 1)
+            rows.append((name_item.text() if name_item else "",
+                         value_item.text() if value_item else ""))
+        return rows
+
+    def _manual_spec(self, photos: list[str] | None = None) -> dict:
+        if photos is None:
+            photos = [str(self._new_photo_path)] if self._new_photo_path else []
+        common = {
+            "brand": self.manual_brand_field.text(),
+            "title": self.manual_title_field.text(),
+            "series": self.manual_series_field.text(),
+            "price": self.manual_price_field.value(),
+            "stock": self.manual_stock_field.value(),
+            "photos": photos,
+            "description": self.utp_edit.toPlainText(),
+        }
+        return serialize_manual_product(
+            self.profile.key, common, self._profile_values(), self._characteristic_rows())
+
     def _manual_mode(self) -> bool:
-        return self.tabs.currentIndex() == 1
+        return self.tabs.currentIndex() == self._manual_tab_index
 
     def _on_mode_changed(self, _index: int) -> None:
         if self._manual_mode():
@@ -230,15 +396,20 @@ class AddForcedProductDialog(QDialog):
         self._update_save_enabled()
 
     def _update_save_enabled(self, *_args) -> None:
+        if self._manual_mode():
+            try:
+                self._manual_spec()
+            except (TypeError, ValueError):
+                valid = False
+            else:
+                valid = True
+            self.save_btn.setEnabled(valid)
+            return
+
         nc_code = self.nc_field.text().strip()
-        valid = (bool(self.manual_brand_field.text().strip())
-                 and bool(self.manual_title_field.text().strip())
-                 and bool(self.manual_series_field.text().strip())
-                 and self.manual_btu_field.value() > 0
-                 and self.manual_price_field.value() > 0
-                 and self._new_photo_path is not None) if self._manual_mode() else is_internal_nc_code(nc_code)
+        valid = is_internal_nc_code(nc_code)
         self.save_btn.setEnabled(valid)
-        if not self._manual_mode() and nc_code and not valid:
+        if nc_code and not valid:
             model = model_hint(nc_code)
             detail = (f" Распознана модель {model}, но нужен соответствующий код НС-…."
                       if model else "")
@@ -258,11 +429,12 @@ class AddForcedProductDialog(QDialog):
 
     def _validate_and_accept(self) -> None:
         if self._manual_mode():
-            if not self.save_btn.isEnabled():
+            try:
+                self._manual_spec()
+            except (TypeError, ValueError) as exc:
                 QMessageBox.warning(
                     self, "Заполните карточку",
-                    "Для товара без кода обязательны бренд, модель, серия, типоразмер, "
-                    "финальная цена и фотография.")
+                    str(exc))
                 return
             self.accept()
             return
@@ -293,31 +465,13 @@ class AddForcedProductDialog(QDialog):
         self._save_existing_product()
 
     def _save_manual_product(self) -> None:
-        brand = self.manual_brand_field.text().strip()
-        title = self.manual_title_field.text().strip()
-        series = self.manual_series_field.text().strip()
-        if not (brand and title and series and self.manual_btu_field.value() > 0
-                and self.manual_price_field.value() > 0 and self._new_photo_path):
-            raise ValueError("Для товара без кода заполнены не все обязательные поля")
-        if self.manual_inverter_box.isChecked() and not re.search(
-                r"инвертор|inverter", series, re.IGNORECASE):
-            series += " Inverter"
-        manual_id = make_manual_id(brand, title, series)
+        spec = self._manual_spec()
+        manual_id = make_manual_id(spec["brand"], spec["title"], spec["series"])
         from avito_studio.workers import upload_photo_blocking
         photo_url = upload_photo_blocking(
             self.ssh, self._new_photo_path, manual_id, parent=self)
-        tech = {}
-        if self.manual_inverter_box.isChecked():
-            tech["Тип компрессора"] = "Инвертор"
-        if self.utp_edit.toPlainText().strip():
-            tech["Особенности"] = self.utp_edit.toPlainText().strip()
-        self.local_cfg.add_manual_product(manual_id, {
-            "brand": brand, "title": title, "series": series,
-            "category_id": self.manual_category_combo.currentData(),
-            "btu": self.manual_btu_field.value(),
-            "price": self.manual_price_field.value(), "stock": 1,
-            "photos": [photo_url], "tech": tech,
-        })
+        spec["photos"] = [photo_url]
+        self.local_cfg.add_manual_product(manual_id, spec)
         self.local_cfg.save()
 
     def _save_existing_product(self) -> None:

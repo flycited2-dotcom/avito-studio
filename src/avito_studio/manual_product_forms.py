@@ -154,7 +154,9 @@ def _characteristics(rows: list[tuple[str, str]]) -> dict[str, str]:
         value = str(raw_value or "").strip()
         if not name and not value:
             continue
-        if not name or not value:
+        if name and not value:
+            continue
+        if not name:
             raise ValueError("У каждой характеристики должны быть название и значение")
         normalized = name.casefold()
         if normalized in seen:
@@ -212,7 +214,11 @@ def serialize_manual_product(
         result["category_id"] = category_id
         result["btu"] = int(btu) if btu.is_integer() else btu
         if profile_values.get("inverter"):
+            if "инвертор" not in series.casefold() and "inverter" not in series.casefold():
+                result["series"] = series + " Inverter"
             tech["Тип компрессора"] = "Инвертор"
+        if description:
+            tech["Особенности"] = description
         return result
 
     if profile_key == "carver":

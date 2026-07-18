@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QMessageBox
 from avito_studio.local_config import LocalConfig
 from avito_studio.add_forced_dialog import (AddForcedProductDialog, model_hint,
                                             make_manual_id)
+from avito_studio.profiles import PROFILES
 
 FIXTURE_CFG = """\
 catalog:
@@ -271,3 +272,84 @@ def test_manual_photo_failure_leaves_no_yaml_entry(qtbot, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="upload failed"):
         dlg.save()
     assert not local_cfg.data["catalog"]["manual_products"]
+
+
+@pytest.mark.parametrize("profile_index,expected_fields", [
+    (0, {"product_type", "btu", "inverter"}),
+    (1, {"product_type", "shape", "width", "height", "color", "materials"}),
+    (2, {"group"}),
+    (3, {"product_type", "fuel_type", "voltage", "rated_power",
+         "maximum_power", "start_type"}),
+])
+def test_dialog_fields_follow_active_profile(qtbot, tmp_path, profile_index, expected_fields):
+    path = tmp_path / "profile.yaml"
+    path.write_text(
+        "profile:\n"
+        "  source_options:\n"
+        "    selected_groups: [Миксеры, Холодильники]\n"
+        "catalog: {manual_products: {}, force_include: {}, manual_photos: {}}\n",
+        encoding="utf-8",
+    )
+    profile = PROFILES[profile_index]
+    dlg = AddForcedProductDialog(LocalConfig(path), FakeSsh(), profile=profile)
+    qtbot.addWidget(dlg)
+
+    assert profile.label in dlg.profile_banner.text()
+    assert set(dlg.profile_fields) == expected_fields
+    assert (dlg.tabs.count() == 2) is (profile.key == "conditioners")
+    if profile.key != "conditioners":
+        assert "btu" not in dlg.profile_fields
+        assert "inverter" not in dlg.profile_fields
+
+
+def test_appliance_group_seeds_characteristics_without_erasing_user_value(qtbot, tmp_path):
+    path = tmp_path / "appliances.yaml"
+    path.write_text(
+        "profile:\n"
+        "  source_options:\n"
+        "    selected_groups: [Миксеры, Холодильники с нижней морозильной камерой]\n"
+        "catalog: {manual_products: {}}\n",
+        encoding="utf-8",
+    )
+    dlg = AddForcedProductDialog(
+        LocalConfig(path), FakeSsh(), profile=PROFILES[2])
+    qtbot.addWidget(dlg)
+    table = dlg.characteristics_table
+    names = [table.item(row, 0).text() for row in range(table.rowCount())]
+    power_row = names.index("Мощность")
+    table.item(power_row, 1).setText("600 Вт")
+
+    dlg.profile_fields["group"].setCurrentIndex(1)
+
+    assert table.item(power_row, 1).text() == "600 Вт"
+    names = [table.item(row, 0).text() for row in range(table.rowCount())]
+    assert "Скорость заморозки" in names
+
+
+def test_save_carver_manual_product_uses_generator_contract(qtbot, tmp_path):
+    path = tmp_path / "carver.yaml"
+    path.write_text("catalog: {manual_products: {}}\n", encoding="utf-8")
+    local_cfg = LocalConfig(path)
+    dlg = AddForcedProductDialog(local_cfg, FakeSsh(), profile=PROFILES[3])
+    qtbot.addWidget(dlg)
+    photo = tmp_path / "generator.png"
+    Image.new("RGB", (4, 4), color="green").save(photo)
+    dlg.manual_brand_field.setText("CARVER")
+    dlg.manual_title_field.setText("PPG-1900i")
+    dlg.manual_price_field.setValue(43200)
+    dlg.profile_fields["fuel_type"].setCurrentIndex(1)
+    dlg.profile_fields["voltage"].setCurrentIndex(1)
+    dlg.profile_fields["rated_power"].setValue(1.7)
+    dlg.profile_fields["maximum_power"].setValue(1.9)
+    dlg._new_photo_path = photo
+    dlg._update_save_enabled()
+
+    assert dlg.save_btn.isEnabled()
+    dlg.save()
+
+    products = LocalConfig(path).data["catalog"]["manual_products"]
+    product = next(iter(products.values()))
+    assert product["group"] == "generator"
+    assert product["tech"]["Номинальная мощность, кВт"] == "1.7"
+    assert product["avito_tags"]["FuelType"] == "Бензин"
+    assert "btu" not in product and "category_id" not in product
