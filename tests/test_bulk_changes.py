@@ -2,8 +2,16 @@ from decimal import Decimal
 
 import pytest
 
-from avito_studio.bulk_changes import BulkRequest, build_bulk_preview
+from avito_studio.bulk_changes import (
+    BulkPreview,
+    BulkRequest,
+    MemberPriceChange,
+    SeriesChange,
+    apply_bulk_preview,
+    build_bulk_preview,
+)
 from avito_studio.catalog_service import CatalogMember, CatalogRow
+from avito_studio.local_config import LocalConfig
 
 
 def _row(key, *, selected=True, members=()):
@@ -110,3 +118,73 @@ def test_invalid_price_requests_are_rejected(mode, value):
 def test_empty_target_selection_is_rejected():
     with pytest.raises(ValueError, match="товар"):
         build_bulk_preview([], BulkRequest(target_keys=()))
+
+
+def _config(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "catalog:\n"
+        "  force_include:\n"
+        "    \"F-1\": {price: 30000, series: \"Forced\"}\n"
+        "  manual_price_override:\n"
+        "    \"A-2\": 25000\n"
+        "  selected_series:\n"
+        "    - \"a\"\n",
+        encoding="utf-8",
+    )
+    return path, LocalConfig(path)
+
+
+def test_apply_bulk_preview_persists_all_changes_with_one_save(tmp_path, monkeypatch):
+    path, cfg = _config(tmp_path)
+    save_calls = 0
+    real_save = cfg.save
+
+    def counted_save():
+        nonlocal save_calls
+        save_calls += 1
+        real_save()
+
+    monkeypatch.setattr(cfg, "save", counted_save)
+    preview = BulkPreview(
+        series_changes=(SeriesChange("a", True, False),),
+        price_changes=(
+            MemberPriceChange("a", "A-1", 20000, 19000, False),
+            MemberPriceChange("a", "A-2", 25000, None, False),
+            MemberPriceChange("forced", "F-1", 30000, 29000, True),
+        ),
+    )
+
+    apply_bulk_preview(cfg, preview)
+
+    reloaded = LocalConfig(path)
+    assert save_calls == 1
+    assert reloaded.is_selected("a") is False
+    assert reloaded.get_manual_price("A-1") == 19000
+    assert reloaded.get_manual_price("A-2") is None
+    assert reloaded.get_force_price("F-1") == 29000
+
+
+def test_apply_rejects_unknown_keys_before_mutating_config(tmp_path):
+    path, cfg = _config(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    preview = BulkPreview((), (), unknown_keys=("missing",))
+
+    with pytest.raises(ValueError, match="missing"):
+        apply_bulk_preview(cfg, preview)
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_apply_rejects_missing_forced_entry_before_other_mutations(tmp_path):
+    path, cfg = _config(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    preview = BulkPreview(
+        series_changes=(SeriesChange("a", True, False),),
+        price_changes=(MemberPriceChange("a", "F-404", 1, 2, True),),
+    )
+
+    with pytest.raises(ValueError, match="F-404"):
+        apply_bulk_preview(cfg, preview)
+
+    assert path.read_text(encoding="utf-8") == before

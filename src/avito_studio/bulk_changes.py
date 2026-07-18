@@ -6,6 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
 
 from avito_studio.catalog_service import CatalogRow
+from avito_studio.local_config import LocalConfig
 
 PriceMode = Literal["unchanged", "percent", "amount", "fixed", "reset"]
 _PRICE_MODES = {"unchanged", "percent", "amount", "fixed", "reset"}
@@ -126,3 +127,29 @@ def build_bulk_preview(rows: list[CatalogRow], request: BulkRequest) -> BulkPrev
         skipped_below_cost=tuple(skipped_below_cost),
         skipped_forced_reset=tuple(skipped_forced_reset),
     )
+
+
+def apply_bulk_preview(local_cfg: LocalConfig, preview: BulkPreview) -> None:
+    """Persist a validated preview in one YAML save; never publishes externally."""
+    if preview.unknown_keys:
+        raise ValueError(f"Не найдены товары: {', '.join(preview.unknown_keys)}")
+    if not preview.has_changes:
+        raise ValueError("В операции нет изменений")
+    for change in preview.price_changes:
+        if change.forced and (
+            change.new_price is None or not local_cfg.has_force_include(change.nc_code)
+        ):
+            raise ValueError(f"Не найдена принудительная позиция {change.nc_code}")
+        if change.new_price is not None and change.new_price <= 0:
+            raise ValueError(f"Некорректная цена для {change.nc_code}")
+
+    for change in preview.series_changes:
+        local_cfg.set_selected(change.key, change.new_selected)
+    for change in preview.price_changes:
+        if change.forced:
+            local_cfg.set_force_price(change.nc_code, change.new_price)
+        elif change.new_price is None:
+            local_cfg.remove_manual_price(change.nc_code)
+        else:
+            local_cfg.set_manual_price(change.nc_code, change.new_price)
+    local_cfg.save()

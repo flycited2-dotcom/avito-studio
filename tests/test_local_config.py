@@ -84,6 +84,12 @@ def test_set_force_price_updates_existing_entry_and_saves(tmp_path):
     assert "ACE-07" in path.read_text(encoding="utf-8")   # серия у записи не потерялась
 
 
+def test_has_force_include_distinguishes_existing_entry(tmp_path):
+    cfg = LocalConfig(_write(tmp_path))
+    assert cfg.has_force_include("НС-1") is True
+    assert cfg.has_force_include("НС-999") is False
+
+
 def test_manual_photo_get_set_roundtrip(tmp_path):
     path = _write(tmp_path)
     cfg = LocalConfig(path)
