@@ -9,7 +9,8 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from avito_studio.catalog_service import CatalogRow, leading_price
 from avito_studio.theme import GREEN, RED, MUTED
 
-_HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
+_CONDITIONER_HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
+_PER_ITEM_HEADERS = ["Бренд", "Товар", "Характеристики", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
 
 # значения avito_status из /autoload/v4/uploads/last_successful/items
 _STATUS_BAD = {"blocked", "rejected", "removed", "archived"}
@@ -24,20 +25,21 @@ class CatalogTableModel(QAbstractTableModel):
     (COL_BRAND, COL_SERIES, COL_SIZES, COL_PRICE, COL_STOCK, COL_CARD,
      COL_SELECTED, COL_AVITO_STATUS) = range(8)
 
-    def __init__(self, rows: list[CatalogRow], parent=None):
+    def __init__(self, rows: list[CatalogRow], parent=None, per_item: bool = False):
         super().__init__(parent)
         self.rows = rows
+        self.headers = _PER_ITEM_HEADERS if per_item else _CONDITIONER_HEADERS
         self.dirty_keys: set[str] = set()
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.rows)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        return 0 if parent.isValid() else len(_HEADERS)
+        return 0 if parent.isValid() else len(self.headers)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
-            return _HEADERS[section]
+            return self.headers[section]
         return None
 
     def flags(self, index):

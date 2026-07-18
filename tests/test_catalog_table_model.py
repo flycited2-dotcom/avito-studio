@@ -18,6 +18,12 @@ def test_row_count_and_headers(qtbot):
     assert model.headerData(0, Qt.Horizontal) == "Бренд"
 
 
+def test_per_item_profile_uses_product_headers():
+    model = CatalogTableModel(ROWS, per_item=True)
+    assert model.headerData(model.COL_SERIES, Qt.Horizontal) == "Товар"
+    assert model.headerData(model.COL_SIZES, Qt.Horizontal) == "Характеристики"
+
+
 def test_display_data_matches_row_fields():
     model = CatalogTableModel(ROWS)
     idx = model.index(0, model.COL_BRAND)

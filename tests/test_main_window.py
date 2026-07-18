@@ -292,6 +292,39 @@ def test_profile_selector_reverts_when_profile_config_missing(qtbot, tmp_path, m
     assert win.profile_combo.currentIndex() == 0
 
 
+def test_profile_switch_clears_stale_rows_and_hides_btu_column(qtbot, tmp_path, monkeypatch):
+    win = _win_with_wreaths_profile(qtbot, tmp_path)
+    win.model = win.model.__class__(ROWS)
+    win.proxy.setSourceModel(win.model)
+    monkeypatch.setattr(win, "refresh", lambda: None)
+
+    win._switch_profile(1)
+
+    assert win.profile.key == "wreaths"
+    assert win.model.rowCount() == 0
+    assert win.model.headerData(win.model.COL_SERIES, Qt.Horizontal) == "Товар"
+    assert win.table.isColumnHidden(win.model.COL_SIZES)
+
+
+def test_add_dialog_receives_active_profile(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    win.profile = PROFILES[3]
+    from avito_studio.add_forced_dialog import AddForcedProductDialog
+    captured = {}
+    real_init = AddForcedProductDialog.__init__
+
+    def spy_init(self, local_cfg, ssh, profile=PROFILES[0], parent=None):
+        captured["profile"] = profile
+        real_init(self, local_cfg, ssh, profile=profile, parent=parent)
+
+    monkeypatch.setattr(AddForcedProductDialog, "__init__", spy_init)
+    monkeypatch.setattr(AddForcedProductDialog, "exec", lambda self: 0)
+
+    win._open_add_forced_dialog()
+
+    assert captured["profile"].key == "carver"
+
+
 def test_profile_combo_disabled_while_busy(qtbot, tmp_path):
     win = _win(qtbot, tmp_path)
     win._set_busy(True)

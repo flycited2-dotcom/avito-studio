@@ -418,6 +418,7 @@ class MainWindow(QMainWindow):
         self.config_path = path
         self.local_cfg = new_cfg
         self.profile_combo.setCurrentIndex(index)  # при программном вызове комбо ещё не переставлен
+        self._install_catalog_model([])
         self._set_busy(False)
         self.refresh()
 
@@ -437,13 +438,18 @@ class MainWindow(QMainWindow):
         self._threads.append(run_in_thread(worker, self._on_refresh_ok, self._on_error))
 
     def _on_refresh_ok(self, rows):
-        self.model = CatalogTableModel(rows)
-        self.proxy.setSourceModel(self.model)
+        self._install_catalog_model(rows)
         self._set_busy(False)
         published = sum(1 for r in rows if r.selected)
         self._update_dashboard(rows)
         self._status(f"Серий: {len(rows)} · публикуется: {published}")
         self.refresh_done.emit()
+
+    def _install_catalog_model(self, rows) -> None:
+        per_item = self.profile.key != "conditioners"
+        self.model = CatalogTableModel(rows, per_item=per_item)
+        self.proxy.setSourceModel(self.model)
+        self.table.setColumnHidden(CatalogTableModel.COL_SIZES, per_item)
 
     def save_local_selection(self):
         for row in self.model.rows:
@@ -540,7 +546,8 @@ class MainWindow(QMainWindow):
 
     def _open_add_forced_dialog(self) -> None:
         from avito_studio.add_forced_dialog import AddForcedProductDialog
-        dlg = AddForcedProductDialog(self.local_cfg, self.ssh, parent=self)
+        dlg = AddForcedProductDialog(
+            self.local_cfg, self.ssh, profile=self.profile, parent=self)
         if not dlg.exec():
             return
         try:
