@@ -108,17 +108,16 @@ def test_percent_preview_shows_each_price_and_floor_skip(qtbot, tmp_path):
     assert dialog.preview_table.rowCount() == 2
 
 
-def test_local_apply_persists_preview_and_emits_result(qtbot, tmp_path, monkeypatch):
+def test_local_apply_persists_preview_and_emits_result(qtbot, tmp_path):
     dialog = _dialog(qtbot, tmp_path)
     dialog.products_table.item(0, 0).setCheckState(Qt.Checked)
     dialog.publication_combo.setCurrentIndex(dialog.publication_combo.findData("off"))
     emitted = []
     dialog.applied.connect(emitted.append)
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.Yes),
-    )
+    dialog.apply_btn.click()
+
+    assert dialog.confirmation_pending is True
+    assert dialog.local_cfg.is_selected("jet") is True
 
     dialog.apply_btn.click()
 
@@ -127,21 +126,18 @@ def test_local_apply_persists_preview_and_emits_result(qtbot, tmp_path, monkeypa
     assert dialog.result() == QDialog.Accepted
 
 
-def test_cancelled_confirmation_does_not_change_yaml(qtbot, tmp_path, monkeypatch):
+def test_changing_preview_cancels_inline_confirmation(qtbot, tmp_path):
     dialog = _dialog(qtbot, tmp_path)
     dialog.products_table.item(0, 0).setCheckState(Qt.Checked)
     dialog.publication_combo.setCurrentIndex(dialog.publication_combo.findData("off"))
     before = dialog.local_cfg.path.read_text(encoding="utf-8")
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.No),
-    )
-
     dialog.apply_btn.click()
+    dialog.price_mode_combo.setCurrentIndex(dialog.price_mode_combo.findData("percent"))
 
     assert dialog.local_cfg.path.read_text(encoding="utf-8") == before
     assert dialog.result() == 0
+    assert dialog.confirmation_pending is False
+    assert dialog.confirmation_label.isVisible() is False
 
 
 def test_save_failure_is_reported_without_closing_dialog(qtbot, tmp_path, monkeypatch):
@@ -153,11 +149,6 @@ def test_save_failure_is_reported_without_closing_dialog(qtbot, tmp_path, monkey
     shown = []
     monkeypatch.setattr(
         QMessageBox,
-        "question",
-        staticmethod(lambda *args, **kwargs: QMessageBox.Yes),
-    )
-    monkeypatch.setattr(
-        QMessageBox,
         "critical",
         staticmethod(lambda *args, **kwargs: shown.append(args[2])),
     )
@@ -167,6 +158,7 @@ def test_save_failure_is_reported_without_closing_dialog(qtbot, tmp_path, monkey
         lambda *args: (_ for _ in ()).throw(OSError("disk full")),
     )
 
+    dialog.apply_btn.click()
     dialog.apply_btn.click()
 
     assert shown == ["disk full"]

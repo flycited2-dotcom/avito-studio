@@ -39,6 +39,7 @@ class BulkEditDialog(QDialog):
         self.rows = rows
         self.local_cfg = local_cfg
         self.preview: BulkPreview | None = None
+        self.confirmation_pending = False
         self.setWindowTitle("Массовое изменение")
         self.resize(980, 720)
 
@@ -145,6 +146,10 @@ class BulkEditDialog(QDialog):
         self.preview_table.verticalHeader().setVisible(False)
         self.preview_table.horizontalHeader().setStretchLastSection(True)
         preview_section.content_layout.addWidget(self.preview_table)
+        self.confirmation_label = QLabel("", objectName="helperText")
+        self.confirmation_label.setWordWrap(True)
+        self.confirmation_label.setVisible(False)
+        preview_section.content_layout.addWidget(self.confirmation_label)
         body_layout.addWidget(preview_section, 1)
         layout.addWidget(body, 1)
 
@@ -275,6 +280,7 @@ class BulkEditDialog(QDialog):
         )
 
     def _refresh_preview(self, *_args) -> None:
+        self._clear_confirmation()
         self.preview_table.setRowCount(0)
         try:
             preview = build_bulk_preview(self.rows, self._request())
@@ -331,16 +337,14 @@ class BulkEditDialog(QDialog):
     def _apply(self) -> None:
         if self.preview is None or not self.preview.has_changes:
             return
-        reply = QMessageBox.question(
-            self,
-            "Применить массовое изменение?",
-            f"Локально изменятся {len(self.preview.series_changes)} серий и "
-            f"{len(self.preview.price_changes)} модельных цен. На Avito ничего не отправится.\n\n"
-            "Продолжить?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        if not self.confirmation_pending:
+            self.confirmation_pending = True
+            self.confirmation_label.setText(
+                f"Подтвердите: локально изменятся {len(self.preview.series_changes)} серий и "
+                f"{len(self.preview.price_changes)} модельных цен. На Avito ничего не отправится."
+            )
+            self.confirmation_label.setVisible(True)
+            self.apply_btn.setText("Подтвердить применение")
             return
         try:
             apply_bulk_preview(self.local_cfg, self.preview)
@@ -349,3 +353,11 @@ class BulkEditDialog(QDialog):
             return
         self.applied.emit(self.preview)
         self.accept()
+
+    def _clear_confirmation(self) -> None:
+        if not hasattr(self, "confirmation_label"):
+            return
+        self.confirmation_pending = False
+        self.confirmation_label.clear()
+        self.confirmation_label.setVisible(False)
+        self.apply_btn.setText("Применить локально")
