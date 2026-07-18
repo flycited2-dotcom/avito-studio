@@ -146,3 +146,14 @@ def test_duplicate_characteristic_names_are_rejected():
             {"group": "Миксеры"},
             [("Мощность", "600 Вт"), (" Мощность ", "700 Вт")],
         )
+
+
+@pytest.mark.parametrize("price", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_price_is_rejected(price):
+    with pytest.raises(ValueError, match="Финальная цена"):
+        serialize_manual_product(
+            "carver",
+            _common(price=price),
+            {"product_type": "generator"},
+            [],
+        )

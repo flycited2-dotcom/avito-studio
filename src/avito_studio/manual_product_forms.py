@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from avito_studio.local_config import LocalConfig
 
@@ -136,7 +137,7 @@ def _positive_number(value, field: str) -> float:
         number = float(value)
     except (TypeError, ValueError):
         raise ValueError(f"Поле «{field}» должно быть числом") from None
-    if number <= 0:
+    if not isfinite(number) or number <= 0:
         raise ValueError(f"Поле «{field}» должно быть больше нуля")
     return number
 

@@ -302,6 +302,18 @@ def test_dialog_fields_follow_active_profile(qtbot, tmp_path, profile_index, exp
         assert "inverter" not in dlg.profile_fields
 
 
+def test_wreath_dialog_does_not_mark_brand_as_required(qtbot, tmp_path):
+    path = tmp_path / "wreaths.yaml"
+    path.write_text("catalog: {manual_products: {}}\n", encoding="utf-8")
+    dlg = AddForcedProductDialog(
+        LocalConfig(path), FakeSsh(), profile=PROFILES[1])
+    qtbot.addWidget(dlg)
+
+    label = dlg.manual_brand_field.parentWidget().layout().labelForField(
+        dlg.manual_brand_field)
+    assert label.text() == "Бренд:"
+
+
 def test_appliance_group_seeds_characteristics_without_erasing_user_value(qtbot, tmp_path):
     path = tmp_path / "appliances.yaml"
     path.write_text(

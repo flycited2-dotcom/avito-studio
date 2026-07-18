@@ -144,7 +144,10 @@ class AddForcedProductDialog(QDialog):
         self.manual_brand_field = QLineEdit()
         self.manual_brand_field.setText(self.form_spec.brand_default)
         self.manual_brand_field.setPlaceholderText("например: ROYAL CLIMA")
-        manual_form.addRow("Бренд*:", self.manual_brand_field)
+        manual_form.addRow(
+            "Бренд:" if self.profile.key == "wreaths" else "Бренд*:",
+            self.manual_brand_field,
+        )
         self.manual_title_field = QLineEdit()
         self.manual_title_field.setPlaceholderText("модель или полное название товара")
         manual_form.addRow("Модель / название*:", self.manual_title_field)
@@ -231,7 +234,7 @@ class AddForcedProductDialog(QDialog):
         media_section.content_layout.addLayout(photo_form)
 
         utp_label = QLabel(
-            "УТП/характеристики для карточки (необязательно)", objectName="fieldLabel"
+            "Описание / особенности товара (необязательно)", objectName="fieldLabel"
         )
         media_section.content_layout.addWidget(utp_label)
         self.utp_edit = QTextEdit()

@@ -149,7 +149,7 @@ catalog:
 
 Rules:
 
-- `brand`, `title`, positive `price`, positive `stock`, and at least one photo are required for all profiles.
+- `title`, finite positive `price`, positive `stock`, and at least one photo are required for all profiles. `brand` is required except for the wreaths profile, where unbranded goods are valid.
 - `series`, `group`, `category_id`, and `btu` are profile-dependent.
 - `tech` is a display/description dictionary.
 - `avito_tags` contains only category-specific XML tags and is validated as non-empty string pairs.
