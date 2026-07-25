@@ -6,6 +6,7 @@
 артикулу прайса и позиция включается в whitelist профиля.
 """
 from __future__ import annotations
+
 import re
 from urllib.parse import quote
 
@@ -80,7 +81,6 @@ def import_content_cards(ssh, rows: list[CatalogRow],
         current = local_cfg.get_manual_photo(row.representative_nc) or ""
         if row.representative_nc not in matches and current.startswith(PUBLIC_CARDS_BASE + "/"):
             local_cfg.remove_manual_photo(row.representative_nc)
-            local_cfg.set_selected(row.key, False)
             row.has_card = False
             row.selected = False
             removed += 1
@@ -89,8 +89,8 @@ def import_content_cards(ssh, rows: list[CatalogRow],
         if not local_cfg.get_manual_photo(nc_code):
             local_cfg.set_manual_photo(nc_code, url)
             added += 1
-        local_cfg.set_selected(row.key, True)
         row.has_card = True
         row.selected = True
+    local_cfg.replace_selected(row.key for row in rows if row.selected)
     local_cfg.save()
     return len(matches), added, removed

@@ -1,9 +1,13 @@
-from PIL import Image
 import pytest
+from PIL import Image
 from PySide6.QtWidgets import QMessageBox
+
+from avito_studio.add_forced_dialog import (
+    AddForcedProductDialog,
+    make_manual_id,
+    model_hint,
+)
 from avito_studio.local_config import LocalConfig
-from avito_studio.add_forced_dialog import (AddForcedProductDialog, model_hint,
-                                            make_manual_id)
 from avito_studio.profiles import PROFILES
 
 FIXTURE_CFG = """\
@@ -174,7 +178,11 @@ def test_save_with_photo_uploads_and_stores_url(qtbot, tmp_path):
     dlg.save()
     assert len(ssh.put_calls) == 1
     reloaded = LocalConfig(path)
-    assert reloaded.get_manual_photo("НС-555") == "https://splithome.ru/static/manual-photos/НС-555.jpg"
+    saved_url = reloaded.get_manual_photo("НС-555")
+    assert saved_url.startswith(
+        "https://splithome.ru/static/manual-photos/НС-555-"
+    )
+    assert saved_url.endswith(".jpg")
 
 
 def test_photo_upload_failure_does_not_leave_partial_force_entry(
@@ -195,6 +203,69 @@ def test_photo_upload_failure_does_not_leave_partial_force_entry(
         dlg.save()
     assert local_cfg.get_force_price("НС-555") is None
     assert local_cfg.get_manual_photo("НС-555") is None
+
+
+def test_yaml_save_failure_restores_in_memory_catalog_after_versioned_upload(
+    qtbot, tmp_path, monkeypatch
+):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_CFG, encoding="utf-8")
+    original_text = path.read_text(encoding="utf-8")
+    local_cfg = LocalConfig(path)
+    dlg = AddForcedProductDialog(local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.nc_field.setText("НС-555")
+    dlg.price_field.setValue(24990)
+    dlg._new_photo_path = tmp_path / "photo.png"
+    from avito_studio import workers
+
+    monkeypatch.setattr(
+        workers,
+        "upload_photo_blocking",
+        lambda *args, **kwargs: (
+            "https://splithome.ru/static/manual-photos/"
+            "НС-555-content-hash.jpg"
+        ),
+    )
+    monkeypatch.setattr(
+        local_cfg,
+        "save",
+        lambda: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        dlg.save()
+
+    assert local_cfg.get_force_price("НС-555") is None
+    assert local_cfg.get_manual_photo("НС-555") is None
+    assert path.read_text(encoding="utf-8") == original_text
+
+
+def test_duplicate_force_id_is_rejected_before_photo_upload(qtbot, tmp_path, monkeypatch):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        FIXTURE_CFG.replace("force_include: {}", "force_include: {НС-555: {price: 24990}}"),
+        encoding="utf-8",
+    )
+    local_cfg = LocalConfig(path)
+    dlg = AddForcedProductDialog(local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.nc_field.setText("НС-555")
+    dlg.price_field.setValue(25990)
+    dlg._new_photo_path = tmp_path / "replacement.png"
+    uploaded = {"called": False}
+    from avito_studio import workers
+    monkeypatch.setattr(
+        workers,
+        "upload_photo_blocking",
+        lambda *args, **kwargs: uploaded.update(called=True) or "unexpected",
+    )
+
+    with pytest.raises(ValueError, match="уже существует"):
+        dlg.save()
+
+    assert uploaded["called"] is False
+    assert local_cfg.get_force_price("НС-555") == 24990
 
 
 def test_save_with_utp_stores_card_brief(qtbot, tmp_path):
@@ -255,7 +326,10 @@ def test_save_fully_manual_product_uploads_photo_and_writes_yaml(qtbot, tmp_path
     product = LocalConfig(path).get_manual_product(manual_id)
     assert product["price"] == 26550
     assert product["btu"] == 9
-    assert product["photos"][0].endswith(f"/{manual_id}.jpg")
+    assert product["photos"][0].startswith(
+        f"https://splithome.ru/static/manual-photos/{manual_id}-"
+    )
+    assert product["photos"][0].endswith(".jpg")
     assert product["tech"]["Тип компрессора"] == "Инвертор"
 
 
@@ -272,6 +346,34 @@ def test_manual_photo_failure_leaves_no_yaml_entry(qtbot, tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="upload failed"):
         dlg.save()
     assert not local_cfg.data["catalog"]["manual_products"]
+
+
+def test_duplicate_manual_id_is_rejected_before_photo_upload(qtbot, tmp_path, monkeypatch):
+    path = tmp_path / "config.yaml"
+    path.write_text(FIXTURE_CFG, encoding="utf-8")
+    local_cfg = LocalConfig(path)
+    dlg = AddForcedProductDialog(local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    photo = tmp_path / "photo.png"
+    _fill_manual_product(dlg, photo)
+    spec = dlg._manual_spec(photos=["https://example.test/existing.jpg"])
+    manual_id = make_manual_id(spec["brand"], spec["title"], spec["series"])
+    local_cfg.add_manual_product(manual_id, spec)
+    uploaded = {"called": False}
+    from avito_studio import workers
+    monkeypatch.setattr(
+        workers,
+        "upload_photo_blocking",
+        lambda *args, **kwargs: uploaded.update(called=True) or "unexpected",
+    )
+
+    with pytest.raises(ValueError, match="уже существует"):
+        dlg.save()
+
+    assert uploaded["called"] is False
+    assert local_cfg.get_manual_product(manual_id)["photos"] == [
+        "https://example.test/existing.jpg"
+    ]
 
 
 @pytest.mark.parametrize("profile_index,expected_fields", [

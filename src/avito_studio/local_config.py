@@ -2,10 +2,15 @@
 (ruamel round-trip), в отличие от apply_inbox.py (который только вставляет строки регэкспом
 и не умеет убирать записи — а «полное управление каталогом» требует и включать, и выключать серию)."""
 from __future__ import annotations
+
+from collections.abc import Iterable
 from pathlib import Path
+
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString as DQ
+
+from avito_studio.atomic_io import atomic_write_yaml
 
 _yaml = YAML()
 _yaml.preserve_quotes = True
@@ -15,24 +20,89 @@ _yaml.width = 4096   # не переносить длинные строки п�
 # offset=2 — стиль, уже используемый в config.yaml ("catalog:\n  selected_series:\n    - x").
 _yaml.indent(mapping=2, sequence=4, offset=2)
 
+NONE_SELECTED = "__none__"
+
 
 class LocalConfig:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.data = _yaml.load(self.path.read_text(encoding="utf-8"))
+        self.selected_series()
 
     def selected_series(self) -> list[str]:
-        return list(self.data.get("catalog", {}).get("selected_series") or [])
+        selected = list(
+            self.data.get("catalog", {}).get("selected_series") or []
+        )
+        if NONE_SELECTED in selected and selected != [NONE_SELECTED]:
+            raise ValueError(
+                "catalog.selected_series: маркер '__none__' допустим только "
+                "как единственное значение"
+            )
+        return selected
 
     def is_selected(self, key: str) -> bool:
-        return key in self.selected_series()
+        selected = self.selected_series()
+        if not selected:
+            return True
+        if NONE_SELECTED in selected:
+            return False
+        return key in selected
 
     def set_selected(self, key: str, selected: bool) -> None:
-        seq = self.data["catalog"]["selected_series"]
-        if selected and key not in seq:
-            seq.append(DQ(key))    # в кавычках — как все остальные записи в файле
-        elif not selected and key in seq:
+        """Set one key while keeping the all/none encoding fail-closed.
+
+        An empty list means "all" to avito-bridge, while ``__none__`` means
+        "none".  Deselecting from the implicit-all state cannot express a
+        one-item exclusion, so it safely becomes "none"; callers that know the
+        complete catalog should use :meth:`replace_selected` for an exact set.
+        """
+        seq = self._selection_seq()
+        if selected:
+            if not seq:
+                return  # already selected by the implicit-all state
+            if NONE_SELECTED in seq:
+                seq.clear()
+            if key not in seq:
+                seq.append(DQ(key))
+            return
+
+        if not seq:
+            seq.append(DQ(NONE_SELECTED))
+        elif NONE_SELECTED in seq:
+            return
+        elif key in seq:
             seq.remove(key)
+            if not seq:
+                seq.append(DQ(NONE_SELECTED))
+
+    def replace_selected(self, keys: Iterable[str]) -> None:
+        """Store an exact whitelist; an empty iterable is encoded as "none"."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in keys:
+            key = str(value)
+            if not key or key == NONE_SELECTED or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(key)
+        seq = self._selection_seq()
+        seq.clear()
+        if normalized:
+            seq.extend(DQ(key) for key in normalized)
+        else:
+            seq.append(DQ(NONE_SELECTED))
+
+    def select_all(self) -> None:
+        """Use avito-bridge's canonical implicit-all representation."""
+        self._selection_seq().clear()
+
+    def _selection_seq(self) -> CommentedSeq:
+        catalog = self.data.setdefault("catalog", CommentedMap())
+        seq = catalog.get("selected_series")
+        if not isinstance(seq, list):
+            seq = CommentedSeq()
+            catalog["selected_series"] = seq
+        return seq
 
     def get_force_price(self, nc_code: str) -> int | None:
         entry = self.data.get("catalog", {}).get("force_include", {}).get(nc_code)
@@ -60,6 +130,30 @@ class LocalConfig:
     def get_manual_product(self, manual_id: str) -> dict | None:
         return self.data.get("catalog", {}).get("manual_products", {}).get(manual_id)
 
+    def get_manual_product_price(self, manual_id: str) -> int | None:
+        entry = self.get_manual_product(manual_id)
+        if not isinstance(entry, dict):
+            return None
+        value = entry.get("price")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return int(value)
+
+    def get_manual_product_photos(self, manual_id: str) -> list[str]:
+        entry = self.get_manual_product(manual_id)
+        if not isinstance(entry, dict):
+            return []
+        value = entry.get("photos")
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [str(url).strip() for url in value if str(url).strip()]
+
+    def get_manual_product_description(self, manual_id: str) -> str:
+        entry = self.get_manual_product(manual_id)
+        if not isinstance(entry, dict):
+            return ""
+        return str(entry.get("description") or "").strip()
+
     def add_manual_product(self, manual_id: str, spec: dict) -> None:
         """Добавить товар, которого нет в БД поставщика, под стабильным ID приложения."""
         products = self._catalog_map("manual_products")
@@ -70,6 +164,45 @@ class LocalConfig:
         # Читаемый многострочный YAML: это полноценная карточка, а не короткий override.
         entry.fa.set_block_style()
         products.insert(0, DQ(manual_id), entry)
+
+    def _manual_product_entry(self, manual_id: str) -> dict:
+        entry = self.get_manual_product(manual_id)
+        if not isinstance(entry, dict):
+            raise KeyError(f"Ручной товар {manual_id!r} не найден")
+        return entry
+
+    def set_manual_product_price(self, manual_id: str, price: int) -> None:
+        """Change the sale price of an existing fully manual product."""
+        if isinstance(price, bool) or not isinstance(price, int) or price <= 0:
+            raise ValueError("Цена ручного товара должна быть целым числом больше нуля")
+        self._manual_product_entry(manual_id)["price"] = price
+
+    def set_manual_product_photos(self, manual_id: str, photos: list[str] | tuple[str, ...]) -> None:
+        """Replace photos of an existing fully manual product."""
+        if isinstance(photos, (str, bytes)):
+            raise TypeError("Фотографии ручного товара должны быть списком URL")
+        normalized = [str(url).strip() for url in photos if str(url).strip()]
+        if not normalized:
+            raise ValueError("У ручного товара должна остаться хотя бы одна фотография")
+        self._manual_product_entry(manual_id)["photos"] = CommentedSeq(
+            DQ(url) for url in normalized)
+
+    def set_manual_product_description(self, manual_id: str, description: str) -> None:
+        """Set or clear the optional description of a fully manual product."""
+        entry = self._manual_product_entry(manual_id)
+        normalized = str(description).strip()
+        if normalized:
+            entry["description"] = DQ(normalized)
+        else:
+            entry.pop("description", None)
+
+    def remove_manual_product(self, manual_id: str) -> bool:
+        """Remove a fully manual product.  Returns whether it existed."""
+        products = self.data.get("catalog", {}).get("manual_products")
+        if not products or manual_id not in products:
+            return False
+        del products[manual_id]
+        return True
 
     def _catalog_map(self, name: str) -> CommentedMap:
         """Возвращает вложенную мапу catalog.<name>, создавая её при первом обращении.
@@ -176,14 +309,31 @@ class LocalConfig:
         options = profile.get("source_options", {}) or {}
         return str(options.get("path", "") or "")
 
-    def set_source_path(self, path: Path) -> None:
+    def set_source_path(
+        self,
+        path: Path,
+        *,
+        relative_to: Path | None = None,
+    ) -> None:
+        """Set the source file path, optionally relative to a portable root."""
         profile = self.data.setdefault("profile", CommentedMap())
         options = profile.get("source_options")
         if not isinstance(options, dict):
             options = CommentedMap()
             profile["source_options"] = options
-        options["path"] = DQ(str(Path(path).resolve()))
+        resolved = Path(path).resolve()
+        if relative_to is None:
+            stored_path = str(resolved)
+        else:
+            root = Path(relative_to).resolve()
+            try:
+                stored_path = resolved.relative_to(root).as_posix()
+            except ValueError as exc:
+                raise ValueError(
+                    f"Путь источника {resolved} находится вне корня {root}"
+                ) from exc
+        options["path"] = DQ(stored_path)
 
     def save(self) -> None:
-        with self.path.open("w", encoding="utf-8", newline="\n") as f:
-            _yaml.dump(self.data, f)
+        self.selected_series()
+        atomic_write_yaml(self.path, self.data, _yaml)

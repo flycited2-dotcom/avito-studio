@@ -1,4 +1,5 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSortFilterProxyModel, Qt
+
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.catalog_table_model import CatalogTableModel
 
@@ -79,7 +80,27 @@ def test_sort_role_dashes_sort_below_real_prices():
                        stock_total=0, has_card=False, forced=True, selected=False,
                        representative_nc="НС-9", price_range="—")]
     model = CatalogTableModel(rows)
-    assert model.data(model.index(0, model.COL_PRICE), Qt.UserRole) == -1
+    assert model.data(model.index(0, model.COL_PRICE), Qt.UserRole) > 25990
+
+
+def test_missing_price_is_last_in_real_ascending_proxy_sort():
+    rows = [
+        CatalogRow(key="missing", source="s", brand="B", series="Missing", sizes="—",
+                   stock_total=0, has_card=False, forced=False, selected=False,
+                   price_range="—"),
+        *ROWS,
+    ]
+    model = CatalogTableModel(rows)
+    proxy = QSortFilterProxyModel()
+    proxy.setSourceModel(model)
+    proxy.setSortRole(Qt.UserRole)
+    proxy.sort(model.COL_PRICE, Qt.AscendingOrder)
+
+    sorted_keys = [
+        model.rows[proxy.mapToSource(proxy.index(i, model.COL_PRICE)).row()].key
+        for i in range(proxy.rowCount())
+    ]
+    assert sorted_keys == ["b", "a", "missing"]
 
 
 def test_status_column_colors():

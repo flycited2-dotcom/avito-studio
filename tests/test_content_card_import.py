@@ -2,7 +2,9 @@ from pathlib import Path
 
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.content_card_import import (
-    expected_filename, import_content_cards, match_content_cards,
+    expected_filename,
+    import_content_cards,
+    match_content_cards,
 )
 from avito_studio.local_config import LocalConfig
 from avito_studio.profiles import PROFILES
@@ -91,6 +93,29 @@ def test_one_content_card_enables_only_one_colour_variant(tmp_path):
     assert reloaded.get_manual_photo("UT-2") is None
     assert reloaded.is_selected(first.key)
     assert not reloaded.is_selected(second.key)
+
+
+def test_removing_stale_auto_card_from_implicit_all_preserves_other_rows(tmp_path):
+    stale = _row("UT-1")
+    untouched = _row("UT-2", "BQ", "Миксер BQ MX999")
+    stale.selected = True
+    untouched.selected = True
+    path = tmp_path / "appliances.yaml"
+    path.write_text(
+        "catalog:\n  manual_photos: {}\n  selected_series: []\n",
+        encoding="utf-8",
+    )
+    cfg = LocalConfig(path)
+    cfg.set_manual_photo(
+        "UT-1", "https://splithome.ru/static/cf-cards/excel_old-card.jpg")
+
+    found, added, removed = import_content_cards(
+        FakeSsh(""), [stale, untouched], cfg)
+
+    assert (found, added, removed) == (0, 0, 1)
+    reloaded = LocalConfig(path)
+    assert reloaded.is_selected(stale.key) is False
+    assert reloaded.is_selected(untouched.key) is True
 
 
 def test_appliances_profile_is_local_and_available_in_selector():

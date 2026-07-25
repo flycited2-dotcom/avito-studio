@@ -29,8 +29,26 @@ def _row(key, *, selected=True, members=()):
     )
 
 
-def _member(nc, price, cost=None, *, price_ok=True, forced=False):
-    return CatalogMember(nc, price, cost, price_ok, forced)
+def _member(
+    nc,
+    price,
+    cost=None,
+    *,
+    price_ok=True,
+    forced=False,
+    product_kind="",
+):
+    return CatalogMember(
+        nc,
+        price,
+        cost,
+        price_ok,
+        forced,
+        supplier_sku=(
+            f"manual:{nc}" if product_kind == "manual" else f"supplier:{nc}"
+        ),
+        product_kind=product_kind,
+    )
 
 
 def test_percent_change_uses_each_current_price_and_skips_below_cost():
@@ -41,7 +59,7 @@ def test_percent_change_uses_each_current_price_and_skips_below_cost():
     request = BulkRequest(
         target_keys=("a", "b"),
         price_mode="percent",
-        price_value=Decimal("-5"),
+        price_value=Decimal(-5),
     )
 
     preview = build_bulk_preview(rows, request)
@@ -77,6 +95,29 @@ def test_reset_marks_regular_override_and_skips_forced_member():
     assert preview.skipped_forced_reset == ("A-2",)
 
 
+def test_reset_explicitly_skips_fully_manual_product_without_auto_price():
+    row = _row(
+        "manual",
+        members=[
+            _member(
+                "manual-x",
+                20000,
+                product_kind="manual",
+                # Historical Bridge exports used forced=True for this product.
+                forced=True,
+            )
+        ],
+    )
+
+    preview = build_bulk_preview(
+        [row], BulkRequest(target_keys=("manual",), price_mode="reset")
+    )
+
+    assert preview.price_changes == ()
+    assert preview.skipped_manual_reset == ("manual-x",)
+    assert preview.skipped_forced_reset == ()
+
+
 def test_publication_change_only_lists_rows_that_really_change():
     rows = [_row("a", selected=True), _row("b", selected=False)]
 
@@ -95,7 +136,7 @@ def test_unknown_key_and_member_without_valid_price_are_reported():
     preview = build_bulk_preview(rows, BulkRequest(
         target_keys=("missing", "a"),
         price_mode="percent",
-        price_value=Decimal("5"),
+        price_value=Decimal(5),
     ))
 
     assert preview.unknown_keys == ("missing",)
@@ -103,11 +144,11 @@ def test_unknown_key_and_member_without_valid_price_are_reported():
 
 
 @pytest.mark.parametrize("mode,value", [
-    ("percent", Decimal("-100")),
-    ("percent", Decimal("10001")),
-    ("fixed", Decimal("0")),
+    ("percent", Decimal(-100)),
+    ("percent", Decimal(10001)),
+    ("fixed", Decimal(0)),
     ("amount", None),
-    ("unknown", Decimal("1")),
+    ("unknown", Decimal(1)),
 ])
 def test_invalid_price_requests_are_rejected(mode, value):
     with pytest.raises(ValueError):
@@ -163,6 +204,111 @@ def test_apply_bulk_preview_persists_all_changes_with_one_save(tmp_path, monkeyp
     assert reloaded.get_manual_price("A-1") == 19000
     assert reloaded.get_manual_price("A-2") is None
     assert reloaded.get_force_price("F-1") == 29000
+
+
+def test_bulk_manual_price_updates_manual_product_and_survives_reload(tmp_path):
+    path, cfg = _config(tmp_path)
+    cfg.add_manual_product(
+        "manual-x",
+        {
+            "brand": "Brand",
+            "title": "Manual Product",
+            "series": "Manual",
+            "price": 20000,
+            "photos": ["https://example.test/photo.jpg"],
+        },
+    )
+    cfg.save()
+    row = _row(
+        "manual",
+        members=[_member("manual-x", 20000, product_kind="manual")],
+    )
+    preview = build_bulk_preview(
+        [row],
+        BulkRequest(
+            target_keys=("manual",),
+            price_mode="fixed",
+            price_value=Decimal(24500),
+        ),
+    )
+
+    assert preview.price_changes[0].kind == "manual"
+    apply_bulk_preview(LocalConfig(path), preview)
+
+    reloaded = LocalConfig(path)
+    assert reloaded.get_manual_product_price("manual-x") == 24500
+    assert reloaded.get_manual_price("manual-x") is None
+
+
+def test_apply_rejects_unknown_manual_product_before_other_mutations(tmp_path):
+    path, cfg = _config(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    preview = BulkPreview(
+        series_changes=(SeriesChange("a", True, False),),
+        price_changes=(
+            MemberPriceChange(
+                "manual",
+                "missing-manual",
+                100,
+                200,
+                False,
+                "manual",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="missing-manual"):
+        apply_bulk_preview(cfg, preview)
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_bulk_deselect_from_implicit_all_keeps_untargeted_rows_selected(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    cfg = LocalConfig(path)
+    rows = [_row("a", selected=True), _row("b", selected=True), _row("c", selected=True)]
+    preview = build_bulk_preview(
+        rows, BulkRequest(target_keys=("a",), publication=False))
+
+    apply_bulk_preview(cfg, preview)
+
+    reloaded = LocalConfig(path)
+    assert reloaded.is_selected("a") is False
+    assert reloaded.is_selected("b") is True
+    assert reloaded.is_selected("c") is True
+    assert reloaded.selected_series() == ["b", "c"]
+
+
+def test_bulk_select_preserves_other_selected_rows_in_exact_whitelist(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        'catalog:\n  selected_series: ["b"]\n', encoding="utf-8")
+    cfg = LocalConfig(path)
+    rows = [_row("a", selected=False), _row("b", selected=True), _row("c", selected=False)]
+    preview = build_bulk_preview(
+        rows, BulkRequest(target_keys=("a",), publication=True))
+
+    apply_bulk_preview(cfg, preview)
+
+    reloaded = LocalConfig(path)
+    assert reloaded.selected_series() == ["a", "b"]
+
+
+def test_bulk_deselect_all_writes_none_sentinel_not_implicit_all(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    cfg = LocalConfig(path)
+    rows = [_row("a", selected=True), _row("b", selected=True)]
+    preview = build_bulk_preview(
+        rows, BulkRequest(target_keys=("a", "b"), publication=False))
+
+    apply_bulk_preview(cfg, preview)
+
+    reloaded = LocalConfig(path)
+    assert reloaded.selected_series() == ["__none__"]
+    assert reloaded.is_selected("a") is False
+    assert reloaded.is_selected("b") is False
 
 
 def test_apply_rejects_unknown_keys_before_mutating_config(tmp_path):

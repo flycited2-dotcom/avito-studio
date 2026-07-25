@@ -1,6 +1,15 @@
 import subprocess
+from pathlib import Path
+
 import pytest
+
 from avito_studio.ssh_client import SshClient
+
+
+@pytest.fixture(autouse=True)
+def _ssh_prerequisites(monkeypatch):
+    monkeypatch.setattr("avito_studio.ssh_client.shutil.which", lambda name: "ssh")
+    monkeypatch.setattr("avito_studio.ssh_client.Path.is_file", lambda path: True)
 
 
 def test_run_builds_correct_ssh_command(monkeypatch):
@@ -15,7 +24,7 @@ def test_run_builds_correct_ssh_command(monkeypatch):
     client = SshClient(host="root@1.2.3.4", key_path="/k")
     out = client.run("echo hi")
     assert out == "hello\n"
-    assert captured["cmd"] == ["ssh", "-i", "/k", "-o", "BatchMode=yes",
+    assert captured["cmd"] == ["ssh", "-i", str(Path("/k")), "-o", "BatchMode=yes",
                                "-o", "ConnectTimeout=45", "root@1.2.3.4", "echo hi"]
     assert captured["kwargs"]["encoding"] == "utf-8"   # иначе Windows берёт cp1251, кириллица ломает вывод
 
@@ -72,3 +81,38 @@ def test_put_pipes_data_via_stdin(monkeypatch):
     client.put("/tmp/f.bin", b"data")
     assert captured["cmd"][-1] == "cat > /tmp/f.bin"
     assert captured["input"] == b"data"
+
+
+def test_put_shell_quotes_remote_path(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["remote_cmd"] = cmd[-1]
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = SshClient(host="root@1.2.3.4", key_path="/k")
+    client.put("/tmp/file name; touch /tmp/pwn", b"data")
+    assert captured["remote_cmd"] == "cat > '/tmp/file name; touch /tmp/pwn'"
+
+
+def test_timeout_is_reported_as_actionable_runtime_error(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client = SshClient(host="root@1.2.3.4", key_path="/k", run_timeout=7)
+    with pytest.raises(RuntimeError, match="7"):
+        client.run("long-running-command")
+
+
+def test_missing_ssh_key_has_actionable_error(monkeypatch):
+    monkeypatch.setattr("avito_studio.ssh_client.Path.is_file", lambda path: False)
+    with pytest.raises(RuntimeError, match="Настройки"):
+        SshClient("root@example.test", "missing-key").run("true")
+
+
+def test_missing_openssh_has_actionable_error(monkeypatch):
+    monkeypatch.setattr("avito_studio.ssh_client.shutil.which", lambda name: None)
+    with pytest.raises(RuntimeError, match="OpenSSH"):
+        SshClient("root@example.test", "key").run("true")

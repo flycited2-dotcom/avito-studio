@@ -136,6 +136,8 @@ def test_serialize_conditioner_keeps_legacy_contract():
     assert result["btu"] == 9
     assert result["tech"]["Тип компрессора"] == "Инвертор"
     assert result["tech"]["Площадь помещения"] == "до 25 м²"
+    assert result["description"] == "Новый товар."
+    assert "Особенности" not in result["tech"]
 
 
 def test_duplicate_characteristic_names_are_rejected():

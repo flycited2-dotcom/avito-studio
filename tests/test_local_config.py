@@ -1,4 +1,6 @@
-from avito_studio.local_config import LocalConfig
+import pytest
+
+from avito_studio.local_config import NONE_SELECTED, LocalConfig
 
 FIXTURE = """\
 # комментарий, который должен выжить
@@ -53,6 +55,87 @@ def test_set_selected_false_removes_and_is_idempotent(tmp_path):
 def test_selected_series_lists_all(tmp_path):
     cfg = LocalConfig(_write(tmp_path))
     assert set(cfg.selected_series()) == {"breeze|funai|sensei 2.0", "daichi|midea|изи"}
+
+
+def test_empty_selection_means_all_for_bridge_backward_compatibility(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    cfg = LocalConfig(path)
+    assert cfg.is_selected("any|existing|series") is True
+
+
+def test_none_sentinel_means_no_series(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text('catalog:\n  selected_series: ["__none__"]\n', encoding="utf-8")
+    cfg = LocalConfig(path)
+    assert cfg.is_selected("__none__") is False
+    assert cfg.is_selected("any|existing|series") is False
+
+
+def test_mixed_none_sentinel_and_explicit_keys_is_rejected_on_load(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        'catalog:\n  selected_series: ["__none__", "explicit-key"]\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="'__none__' допустим только как единственное значение",
+    ):
+        LocalConfig(path)
+
+
+def test_mixed_none_sentinel_and_explicit_keys_is_rejected_before_save(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.data["catalog"]["selected_series"].insert(0, NONE_SELECTED)
+
+    with pytest.raises(
+        ValueError,
+        match="'__none__' допустим только как единственное значение",
+    ):
+        cfg.save()
+
+    assert NONE_SELECTED not in path.read_text(encoding="utf-8")
+
+
+def test_replace_selected_stores_exact_deduplicated_whitelist(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.replace_selected(["new|a", "new|a", NONE_SELECTED, "", "new|b"])
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.selected_series() == ["new|a", "new|b"]
+    assert reloaded.is_selected("new|a") is True
+    assert reloaded.is_selected("breeze|funai|sensei 2.0") is False
+
+
+def test_replace_selected_empty_is_encoded_as_none_not_all(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.replace_selected([])
+    cfg.save()
+    reloaded = LocalConfig(path)
+    assert reloaded.selected_series() == [NONE_SELECTED]
+    assert reloaded.is_selected("anything") is False
+
+
+def test_removing_last_explicit_selection_becomes_none(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text('catalog:\n  selected_series: ["only"]\n', encoding="utf-8")
+    cfg = LocalConfig(path)
+    cfg.set_selected("only", False)
+    assert cfg.selected_series() == [NONE_SELECTED]
+    assert cfg.is_selected("another") is False
+
+
+def test_select_all_uses_empty_bridge_representation(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.select_all()
+    assert cfg.selected_series() == []
+    assert cfg.is_selected("anything") is True
 
 
 def test_save_preserves_sequence_indentation_style(tmp_path):
@@ -146,6 +229,78 @@ def test_duplicate_fully_manual_product_is_rejected(tmp_path):
     cfg.add_manual_product("manual-x", spec)
     with __import__("pytest").raises(ValueError, match="уже существует"):
         cfg.add_manual_product("manual-x", spec)
+
+
+def test_edit_and_remove_fully_manual_product_roundtrip(tmp_path):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.add_manual_product("manual-x", {
+        "brand": "B", "title": "T", "series": "S",
+        "price": 100, "photos": ["https://x/old.jpg"],
+    })
+    cfg.set_manual_product_price("manual-x", 250)
+    cfg.set_manual_product_photos(
+        "manual-x", [" https://x/new-1.jpg ", "https://x/new-2.jpg"])
+    cfg.set_manual_product_description("manual-x", " Новое описание ")
+    cfg.save()
+
+    product = LocalConfig(path).get_manual_product("manual-x")
+    assert product["price"] == 250
+    assert list(product["photos"]) == ["https://x/new-1.jpg", "https://x/new-2.jpg"]
+    assert product["description"] == "Новое описание"
+    reloaded = LocalConfig(path)
+    assert reloaded.get_manual_product_price("manual-x") == 250
+    assert reloaded.get_manual_product_photos("manual-x") == [
+        "https://x/new-1.jpg",
+        "https://x/new-2.jpg",
+    ]
+    assert reloaded.get_manual_product_description("manual-x") == "Новое описание"
+
+    cfg = LocalConfig(path)
+    cfg.set_manual_product_description("manual-x", " ")
+    assert "description" not in cfg.get_manual_product("manual-x")
+    assert cfg.remove_manual_product("manual-x") is True
+    assert cfg.remove_manual_product("manual-x") is False
+    cfg.save()
+    assert LocalConfig(path).get_manual_product("manual-x") is None
+
+
+@pytest.mark.parametrize("method,value,error", [
+    ("set_manual_product_price", 0, ValueError),
+    ("set_manual_product_price", True, ValueError),
+    ("set_manual_product_photos", [], ValueError),
+    ("set_manual_product_photos", "https://x/not-a-list.jpg", TypeError),
+])
+def test_manual_product_edit_rejects_invalid_values(tmp_path, method, value, error):
+    path = _write(tmp_path)
+    cfg = LocalConfig(path)
+    cfg.add_manual_product("manual-x", {
+        "brand": "B", "title": "T", "series": "S",
+        "price": 100, "photos": ["https://x/old.jpg"],
+    })
+    with pytest.raises(error):
+        getattr(cfg, method)("manual-x", value)
+
+
+def test_manual_product_edit_rejects_unknown_id(tmp_path):
+    cfg = LocalConfig(_write(tmp_path))
+    with pytest.raises(KeyError, match="не найден"):
+        cfg.set_manual_product_price("missing", 100)
+
+
+def test_local_config_save_failure_preserves_previous_yaml(tmp_path, monkeypatch):
+    path = _write(tmp_path)
+    before = path.read_text(encoding="utf-8")
+    cfg = LocalConfig(path)
+    cfg.set_force_price("НС-1", 99999)
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("avito_studio.local_config.atomic_write_yaml", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        cfg.save()
+    assert path.read_text(encoding="utf-8") == before
 
 
 # Реальный config.yaml: комментарий про manual_photos стоит СРАЗУ после последней записи

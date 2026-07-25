@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Literal
 
 from avito_studio.catalog_service import CatalogRow
@@ -27,6 +27,12 @@ class MemberPriceChange:
     old_price: int | None
     new_price: int | None
     forced: bool
+    product_kind: str = ""
+
+    @property
+    def kind(self) -> str:
+        """Return the persisted price owner, including legacy callers."""
+        return self.product_kind or ("force_include" if self.forced else "supplier")
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,8 @@ class BulkPreview:
     skipped_without_price: tuple[str, ...] = ()
     skipped_below_cost: tuple[str, ...] = ()
     skipped_forced_reset: tuple[str, ...] = ()
+    skipped_manual_reset: tuple[str, ...] = ()
+    selected_keys_after: tuple[str, ...] | None = None
 
     @property
     def has_changes(self) -> bool:
@@ -58,7 +66,7 @@ def _validated_value(request: BulkRequest) -> Decimal | None:
     if request.price_value is None:
         raise ValueError("Укажите значение изменения цены")
     value = Decimal(request.price_value)
-    if request.price_mode == "percent" and not Decimal("-100") < value <= Decimal("10000"):
+    if request.price_mode == "percent" and not Decimal(-100) < value <= Decimal(10000):
         raise ValueError("Процент должен быть больше -100 и не больше 10000")
     if request.price_mode == "fixed" and value <= 0:
         raise ValueError("Фиксированная цена должна быть больше нуля")
@@ -68,12 +76,12 @@ def _validated_value(request: BulkRequest) -> Decimal | None:
 def _new_price(current: int, mode: PriceMode, value: Decimal) -> int:
     current_decimal = Decimal(current)
     if mode == "percent":
-        calculated = current_decimal * (Decimal("1") + value / Decimal("100"))
+        calculated = current_decimal * (Decimal(1) + value / Decimal(100))
     elif mode == "amount":
         calculated = current_decimal + value
     else:
         calculated = value
-    result = int(calculated.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    result = int(calculated.quantize(Decimal(1), rounding=ROUND_HALF_UP))
     if result <= 0:
         raise ValueError("Итоговая цена должна быть больше нуля")
     return result
@@ -91,6 +99,7 @@ def build_bulk_preview(rows: list[CatalogRow], request: BulkRequest) -> BulkPrev
     skipped_without_price: list[str] = []
     skipped_below_cost: list[str] = []
     skipped_forced_reset: list[str] = []
+    skipped_manual_reset: list[str] = []
 
     for key in keys:
         row = rows_by_key.get(key)
@@ -101,12 +110,25 @@ def build_bulk_preview(rows: list[CatalogRow], request: BulkRequest) -> BulkPrev
         if request.price_mode == "unchanged":
             continue
         for member in row.members:
+            product_kind = member.product_kind or (
+                "force_include" if member.forced else "supplier"
+            )
             if request.price_mode == "reset":
-                if member.forced:
+                if product_kind == "manual":
+                    # A fully manual product has no supplier/automatic price to
+                    # return to. Its positive final price is required by Bridge.
+                    skipped_manual_reset.append(member.nc_code)
+                elif product_kind == "force_include" or member.forced:
                     skipped_forced_reset.append(member.nc_code)
                 else:
                     price_changes.append(MemberPriceChange(
-                        key, member.nc_code, member.current_price, None, False))
+                        key,
+                        member.nc_code,
+                        member.current_price,
+                        None,
+                        False,
+                        product_kind,
+                    ))
                 continue
             if not member.price_ok or member.current_price is None:
                 skipped_without_price.append(member.nc_code)
@@ -117,15 +139,27 @@ def build_bulk_preview(rows: list[CatalogRow], request: BulkRequest) -> BulkPrev
                 continue
             if new_price != member.current_price:
                 price_changes.append(MemberPriceChange(
-                    key, member.nc_code, member.current_price, new_price, member.forced))
+                    key,
+                    member.nc_code,
+                    member.current_price,
+                    new_price,
+                    member.forced,
+                    product_kind,
+                ))
 
     return BulkPreview(
         series_changes=tuple(series_changes),
         price_changes=tuple(price_changes),
+        selected_keys_after=tuple(
+            row.key
+            for row in rows
+            if (request.publication if row.key in keys else row.selected)
+        ) if request.publication is not None else None,
         unknown_keys=unknown,
         skipped_without_price=tuple(skipped_without_price),
         skipped_below_cost=tuple(skipped_below_cost),
         skipped_forced_reset=tuple(skipped_forced_reset),
+        skipped_manual_reset=tuple(skipped_manual_reset),
     )
 
 
@@ -136,18 +170,30 @@ def apply_bulk_preview(local_cfg: LocalConfig, preview: BulkPreview) -> None:
     if not preview.has_changes:
         raise ValueError("В операции нет изменений")
     for change in preview.price_changes:
-        if change.forced and (
+        if change.kind == "force_include" and (
             change.new_price is None or not local_cfg.has_force_include(change.nc_code)
         ):
             raise ValueError(f"Не найдена принудительная позиция {change.nc_code}")
+        if change.kind == "manual":
+            if change.new_price is None:
+                raise ValueError(
+                    f"У ручного товара {change.nc_code} нельзя сбросить финальную цену"
+                )
+            if local_cfg.get_manual_product(change.nc_code) is None:
+                raise ValueError(f"Не найден ручной товар {change.nc_code}")
         if change.new_price is not None and change.new_price <= 0:
             raise ValueError(f"Некорректная цена для {change.nc_code}")
 
-    for change in preview.series_changes:
-        local_cfg.set_selected(change.key, change.new_selected)
+    if preview.selected_keys_after is not None:
+        local_cfg.replace_selected(preview.selected_keys_after)
+    else:
+        for change in preview.series_changes:
+            local_cfg.set_selected(change.key, change.new_selected)
     for change in preview.price_changes:
-        if change.forced:
+        if change.kind == "force_include":
             local_cfg.set_force_price(change.nc_code, change.new_price)
+        elif change.kind == "manual":
+            local_cfg.set_manual_product_price(change.nc_code, change.new_price)
         elif change.new_price is None:
             local_cfg.remove_manual_price(change.nc_code)
         else:

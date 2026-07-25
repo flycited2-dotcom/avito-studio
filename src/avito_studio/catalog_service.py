@@ -1,9 +1,11 @@
 """Собирает строки таблицы каталога: фактические данные БД (с сервера, через SSH catalog_export)
 + локальный статус публикации (config.yaml, LocalConfig)."""
 from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass
+
 from avito_studio.local_config import LocalConfig
 
 REMOTE_EXPORT_CMD = ("cd /opt/avito-bridge && export PYTHONPATH=src && "
@@ -22,6 +24,9 @@ class CatalogMember:
     cost: int | None
     price_ok: bool
     forced: bool
+    supplier_sku: str = ""
+    product_kind: str = ""
+    ad_id_revision: int = 0
 
 
 @dataclass
@@ -39,6 +44,8 @@ class CatalogRow:
     price_range: str = "—"
     avito_status: str | None = None
     members: tuple[CatalogMember, ...] = ()
+    ad_supplier_sku: str = ""
+    ad_id_revision: int = 0
 
 
 def leading_price(price_range: str) -> int | None:
@@ -83,12 +90,17 @@ def _rows_from_data(data: dict, local_cfg: LocalConfig) -> list[CatalogRow]:
             # аномальная серия без членов не должна ронять всё «Обновить» целиком
             representative_nc=g["members"][0]["nc_code"] if g["members"] else "",
             price_range=_price_range_label(g["members"]),
+            ad_supplier_sku=str(g.get("ad_supplier_sku") or ""),
+            ad_id_revision=int(g.get("ad_id_revision") or 0),
             members=tuple(CatalogMember(
                 nc_code=str(member.get("nc_code", "")),
                 current_price=member.get("price"),
                 cost=member.get("cost"),
                 price_ok=bool(member.get("price_ok")),
                 forced=bool(member.get("forced")),
+                supplier_sku=str(member.get("supplier_sku") or ""),
+                product_kind=str(member.get("product_kind") or ""),
+                ad_id_revision=int(member.get("ad_id_revision") or 0),
             ) for member in g["members"])))
     return rows
 
@@ -97,8 +109,8 @@ def fetch_local_catalog(config_path, local_cfg: LocalConfig) -> list[CatalogRow]
     """Каталог локального XLS-профиля без предварительного деплоя прайса на VPS."""
     from avito_bridge.catalog_export import build_catalog_json
     from avito_bridge.config import load_config
-    from avito_bridge.ingest.sources import get_source
+    from avito_bridge.ingest.sources import fetch_profile_offers
 
     cfg = load_config(config_path)
-    offers = get_source(cfg.source)(cfg)
+    offers = fetch_profile_offers(cfg)
     return _rows_from_data(build_catalog_json(offers, cfg), local_cfg)

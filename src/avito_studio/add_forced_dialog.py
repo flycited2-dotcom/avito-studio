@@ -4,13 +4,33 @@
 Оба сценария сначала загружают фото, затем атомарно меняют локальный YAML. Внешняя публикация
 происходит только отдельной кнопкой главного окна с подтверждением."""
 from __future__ import annotations
-from pathlib import Path
+
 import hashlib
 import re
-from PySide6.QtWidgets import (QDialog, QFormLayout, QLineEdit, QSpinBox, QPushButton,
-                               QVBoxLayout, QHBoxLayout, QLabel, QMessageBox, QTextEdit,
-                               QTabWidget, QWidget, QComboBox, QCheckBox, QScrollArea,
-                               QDoubleSpinBox, QTableWidget, QTableWidgetItem)
+from copy import deepcopy
+from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QScrollArea,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from avito_studio.atomic_io import atomic_write_text
 from avito_studio.local_config import LocalConfig
 from avito_studio.manual_product_forms import (
     FieldSpec,
@@ -28,7 +48,6 @@ from avito_studio.ui_components import (
     get_open_file_name,
     role_button,
 )
-
 
 _MODEL_TOKEN = re.compile(r"\b[A-ZА-ЯЁ]{2,8}-[A-ZА-ЯЁ0-9./-]{3,}\b", re.IGNORECASE)
 _INTERNAL_NC = re.compile(r"^НС-\d+$", re.IGNORECASE)
@@ -48,7 +67,10 @@ def is_internal_nc_code(value: str) -> bool:
 def make_manual_id(brand: str, title: str, series: str) -> str:
     """Стабильный ASCII-ID: одинаковая карточка не получит новый Avito Id после пересборки."""
     signature = "|".join(part.strip().lower() for part in (brand, title, series))
-    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha1(
+        signature.encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:10]
     token = model_hint(title) or "product"
     stem = re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-") or "product"
     return f"manual-{stem}-{digest}"
@@ -433,7 +455,10 @@ class AddForcedProductDialog(QDialog):
     def _validate_and_accept(self) -> None:
         if self._manual_mode():
             try:
-                self._manual_spec()
+                spec = self._manual_spec()
+                manual_id = make_manual_id(
+                    spec["brand"], spec["title"], spec["series"])
+                self._ensure_product_id_is_new(manual_id, manual=True)
             except (TypeError, ValueError) as exc:
                 QMessageBox.warning(
                     self, "Заполните карточку",
@@ -451,6 +476,11 @@ class AddForcedProductDialog(QDialog):
                 self, "Нужен внутренний код товара",
                 "Нельзя использовать полное название как артикул." + suffix)
             return
+        try:
+            self._ensure_product_id_is_new(nc_code, manual=False)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Товар уже добавлен", str(exc))
+            return
         if self.price_field.value() == 0:
             reply = QMessageBox.question(
                 self, "Цена не указана",
@@ -462,14 +492,29 @@ class AddForcedProductDialog(QDialog):
 
     def save(self) -> None:
         """Сначала фото, затем локальный YAML: при сбое не остаётся частичной записи."""
-        if self._manual_mode():
-            self._save_manual_product()
-            return
-        self._save_existing_product()
+        original_data = deepcopy(self.local_cfg.data)
+        original_text = self.local_cfg.path.read_text(encoding="utf-8")
+        try:
+            if self._manual_mode():
+                self._save_manual_product()
+                return
+            self._save_existing_product()
+        except Exception:
+            self.local_cfg.data = original_data
+            try:
+                if self.local_cfg.path.read_text(encoding="utf-8") != original_text:
+                    atomic_write_text(self.local_cfg.path, original_text)
+            except OSError:
+                # Preserve the actionable original error.  Atomic LocalConfig
+                # writes keep the previous YAML unless the filesystem itself
+                # is unavailable.
+                pass
+            raise
 
     def _save_manual_product(self) -> None:
         spec = self._manual_spec()
         manual_id = make_manual_id(spec["brand"], spec["title"], spec["series"])
+        self._ensure_product_id_is_new(manual_id, manual=True)
         from avito_studio.workers import upload_photo_blocking
         photo_url = upload_photo_blocking(
             self.ssh, self._new_photo_path, manual_id, parent=self)
@@ -482,6 +527,7 @@ class AddForcedProductDialog(QDialog):
         if not is_internal_nc_code(nc):
             raise ValueError(
                 "Внутренний код товара должен быть указан без пробелов и полного названия")
+        self._ensure_product_id_is_new(nc, manual=False)
 
         # Сначала выполняем единственную внешнюю операцию. Раньше force_include менялся ДО
         # загрузки фото: при ошибке в памяти LocalConfig оставалась полузаписанная карточка.
@@ -498,3 +544,19 @@ class AddForcedProductDialog(QDialog):
         if self.utp_edit.toPlainText().strip():
             self.local_cfg.set_card_brief(nc, self.utp_edit.toPlainText())
         self.local_cfg.save()
+
+    def _ensure_product_id_is_new(self, product_id: str, *, manual: bool) -> None:
+        """Reject duplicate IDs before the first irreversible photo upload.
+
+        A repeated add is an edit, not a new product.  Checking both catalog
+        namespaces also protects hand-edited YAML from an ambiguous ID that
+        would otherwise overwrite a remote photo before the local save fails.
+        """
+        duplicate_manual = self.local_cfg.get_manual_product(product_id) is not None
+        duplicate_forced = self.local_cfg.has_force_include(product_id)
+        if not duplicate_manual and not duplicate_forced:
+            return
+        kind = "ручной товар" if manual else "товар с НС-кодом"
+        raise ValueError(
+            f"Такой {kind} уже существует. Откройте его в каталоге для редактирования."
+        )

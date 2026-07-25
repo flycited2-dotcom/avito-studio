@@ -13,11 +13,28 @@ class Profile:
     local_catalog: bool = False  # источник доступен только на Windows до деплоя прайса на VPS
     publish_enabled: bool = True
     publish_block_reason: str = ""
+    cards_enabled: bool = False
 
 
 PROFILES: list[Profile] = [
-    Profile("conditioners", "Кондиционеры", "config/config.yaml"),
+    Profile(
+        "conditioners",
+        "Кондиционеры",
+        "config/config.yaml",
+        cards_enabled=True,
+    ),
     Profile("wreaths", "Венки", "profiles/wreaths.yaml"),
-    Profile("appliances", "Бытовая техника", "profiles/appliances.yaml", local_catalog=True),
+    Profile(
+        "appliances",
+        "Бытовая техника",
+        "profiles/appliances.yaml",
+        local_catalog=True,
+        publish_enabled=False,
+        publish_block_reason=(
+            "Профиль бытовой техники остаётся безопасным предпросмотром: "
+            "для основного аккаунта нужен объединённый фид с кондиционерами и "
+            "подтверждение категорий/наценок. На сервер ничего не отправлено."
+        ),
+    ),
     Profile("carver", "Генераторы CARVER", "profiles/carver.yaml", local_catalog=True),
 ]

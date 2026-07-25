@@ -1,7 +1,12 @@
-from PySide6.QtCore import Qt
+import threading
+
+from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMessageBox
-from avito_studio.catalog_service import CatalogRow
+
 from avito_studio.bulk_changes import BulkPreview, MemberPriceChange, SeriesChange
+from avito_studio.catalog_cache import save_catalog_cache
+from avito_studio.catalog_service import CatalogRow
 from avito_studio.main_window import MainWindow
 from avito_studio.profiles import PROFILES
 
@@ -46,7 +51,7 @@ def test_dashboard_updates_counts_and_navigation(qtbot, tmp_path):
     with qtbot.waitSignal(win.refresh_done, timeout=3000):
         win.refresh()
     assert win.stat_total_value.text() == "2"
-    assert win.stat_selected_value.text() == "0"
+    assert win.stat_selected_value.text() == "2"  # пустой whitelist = публиковать всё
     assert win.stat_cards_value.text() == "1"
     assert win.stat_issues_value.text() == "1"
     win.nav_catalog.click()
@@ -55,9 +60,29 @@ def test_dashboard_updates_counts_and_navigation(qtbot, tmp_path):
     assert win.nav_catalog.isChecked()
 
 
+def test_about_dialog_reports_release_and_bridge_revision(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    shown = {}
+    monkeypatch.setattr(
+        QMessageBox,
+        "about",
+        staticmethod(
+            lambda _parent, title, text: shown.update(title=title, text=text)
+        ),
+    )
+
+    win._show_about()
+
+    assert shown["title"] == "О программе"
+    assert "Avito Content Studio 0.3.0" in shown["text"]
+    assert "Avito Bridge:" in shown["text"]
+    assert "studio.log" in shown["text"]
+
+
 def test_toggle_checkbox_marks_dirty_and_updates_local_config(qtbot, tmp_path):
     cfg_path = tmp_path / "config.yaml"
-    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    cfg_path.write_text(
+        'catalog:\n  selected_series: ["__none__"]\n', encoding="utf-8")
     win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
     qtbot.addWidget(win)
     with qtbot.waitSignal(win.refresh_done, timeout=3000):
@@ -67,6 +92,62 @@ def test_toggle_checkbox_marks_dirty_and_updates_local_config(qtbot, tmp_path):
     win.save_local_selection()
     reloaded_text = cfg_path.read_text(encoding="utf-8")
     assert '"a"' in reloaded_text
+
+
+def test_unchecking_one_from_implicit_all_saves_every_other_row(
+    qtbot, tmp_path
+):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
+    qtbot.addWidget(win)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    assert all(row.selected for row in win.model.rows)
+
+    first = win.model.index(0, win.model.COL_SELECTED)
+    win.model.setData(first, Qt.Unchecked, Qt.CheckStateRole)
+    win.save_local_selection()
+
+    assert not win.local_cfg.is_selected("a")
+    assert win.local_cfg.is_selected("b")
+    assert win.local_cfg.selected_series() == ["b"]
+
+
+def test_saving_before_first_refresh_does_not_erase_existing_selection(
+    qtbot, tmp_path
+):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        'catalog:\n  selected_series: ["keep-me"]\n', encoding="utf-8"
+    )
+    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
+    qtbot.addWidget(win)
+
+    win.save_local_selection()
+
+    assert win.local_cfg.selected_series() == ["keep-me"]
+
+
+def test_refresh_saves_pending_checkbox_changes(qtbot, tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    win = MainWindow(bridge_root=tmp_path, config_path=cfg_path, ssh=FakeSsh())
+    qtbot.addWidget(win)
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    win.model.setData(
+        win.model.index(0, win.model.COL_SELECTED),
+        Qt.Unchecked,
+        Qt.CheckStateRole,
+    )
+
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+
+    assert win.local_cfg.selected_series() == ["b"]
+    assert not win.model.rows[0].selected
+    assert win.model.rows[1].selected
 
 
 def _win(qtbot, tmp_path, catalog_yaml="catalog:\n  force_include: {}\n  manual_photos: {}\n  selected_series: []\n"):
@@ -218,7 +299,7 @@ def test_publish_deploys_when_confirmed(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
     with qtbot.waitSignal(win.deploy_done, timeout=3000):
         win.publish()
-    assert len(win._threads) == 1
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
 
 
 def test_publish_confirmation_lists_concrete_changes_after_first_publish(qtbot, tmp_path, monkeypatch):
@@ -243,7 +324,13 @@ def test_publish_saves_snapshot_for_next_summary(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
     with qtbot.waitSignal(win.deploy_done, timeout=3000):
         win.publish()
-    assert (tmp_path / "publish-snapshot" / "config" / "config.yaml").exists()
+    assert (
+        tmp_path
+        / "publish-snapshot"
+        / "conditioners"
+        / "config"
+        / "config.yaml"
+    ).exists()
 
 
 def test_busy_guard_disables_and_reenables_toolbar_actions(qtbot, tmp_path):
@@ -290,7 +377,8 @@ def _win_with_wreaths_profile(qtbot, tmp_path):
     (tmp_path / "avito-descriptions").mkdir(exist_ok=True)
     (tmp_path / "profiles").mkdir(exist_ok=True)
     (tmp_path / "config" / "config.yaml").write_text(
-        "catalog:\n  force_include: {}\n  manual_photos: {}\n  selected_series: []\n", encoding="utf-8")
+        'catalog:\n  force_include: {}\n  manual_photos: {}\n'
+        '  selected_series: ["__none__"]\n', encoding="utf-8")
     (tmp_path / "profiles" / "wreaths.yaml").write_text(
         "catalog:\n  selected_series: []\n", encoding="utf-8")
     win = MainWindow(bridge_root=tmp_path, config_path=tmp_path / "config" / "config.yaml",
@@ -335,6 +423,29 @@ def test_profile_selector_reverts_when_profile_config_missing(qtbot, tmp_path, m
     assert win.profile_combo.currentIndex() == 0
 
 
+def test_profile_selector_stays_put_when_pending_selection_cannot_be_saved(
+    qtbot, tmp_path, monkeypatch
+):
+    win = _win_with_wreaths_profile(qtbot, tmp_path)
+    shown = {"error": False}
+
+    def fail_save():
+        raise OSError("disk is read-only")
+
+    monkeypatch.setattr(win, "save_local_selection", fail_save)
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        staticmethod(lambda *a, **k: shown.update(error=True)),
+    )
+
+    win._switch_profile(1)
+
+    assert shown["error"] is True
+    assert win.profile.key == "conditioners"
+    assert win.profile_combo.currentIndex() == 0
+
+
 def test_profile_switch_clears_stale_rows_and_hides_btu_column(qtbot, tmp_path, monkeypatch):
     win = _win_with_wreaths_profile(qtbot, tmp_path)
     win.model = win.model.__class__(ROWS)
@@ -347,6 +458,26 @@ def test_profile_switch_clears_stale_rows_and_hides_btu_column(qtbot, tmp_path, 
     assert win.model.rowCount() == 0
     assert win.model.headerData(win.model.COL_SERIES, Qt.Horizontal) == "Товар"
     assert win.table.isColumnHidden(win.model.COL_SIZES)
+
+
+def test_carver_profile_waits_for_explicit_price_import(qtbot, tmp_path):
+    win = _win_with_wreaths_profile(qtbot, tmp_path)
+    (tmp_path / "profiles" / "carver.yaml").write_text(
+        "profile:\n"
+        "  source_options:\n"
+        '    path: "runtime/carver/current.xlsx"\n'
+        "catalog:\n"
+        "  selected_series: []\n",
+        encoding="utf-8",
+    )
+    calls_before = list(win.ssh.calls)
+
+    win._switch_profile(3)
+
+    assert win.profile.key == "carver"
+    assert win._threads == []
+    assert win.ssh.calls == calls_before
+    assert "выберите свежий XLSX-прайс CARVER" in win.statusBar().currentMessage()
 
 
 def test_add_dialog_receives_active_profile(qtbot, tmp_path, monkeypatch):
@@ -414,3 +545,187 @@ def test_publish_failure_shows_critical_box_and_reenables(qtbot, tmp_path, monke
         win.publish()
     assert shown["error"] is True
     assert all(a.isEnabled() for a in win._busy_actions)
+
+
+def test_appliances_content_import_runs_outside_ui_thread(qtbot, tmp_path, monkeypatch):
+    win = _win(qtbot, tmp_path)
+    win.profile = next(profile for profile in PROFILES if profile.key == "appliances")
+    row = CatalogRow(
+        key="price_xls|item|pricexls:UT-1",
+        source="price_xls",
+        brand="Ballu",
+        series="Водонагреватель Ballu BWH/S 80 Shell",
+        sizes="—",
+        stock_total=1,
+        has_card=False,
+        forced=False,
+        selected=False,
+        representative_nc="UT-1",
+    )
+    win._install_catalog_model([row])
+    win._set_busy(False)
+    observed = {}
+
+    def fake_import(ssh, rows, local_cfg):
+        observed["thread"] = QThread.currentThread()
+        return 1, 1, 0
+
+    import avito_studio.content_card_import as importer
+    monkeypatch.setattr(importer, "import_content_cards", fake_import)
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    win._import_content_cards()
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
+
+    assert observed["thread"] is not win.thread()
+    assert all(
+        action.isEnabled()
+        for action in win._busy_actions
+        if action is not win.act_publish
+    )
+    assert win.act_publish.isEnabled() is False
+
+
+class _BlockingWorker(QObject):
+    finished = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, gate):
+        super().__init__()
+        self.gate = gate
+
+    def run(self):
+        self.gate.wait(3)
+        self.finished.emit("done")
+
+
+def test_close_waits_for_worker_and_thread_registry_is_pruned(
+    qtbot, tmp_path, monkeypatch
+):
+    win = _win(qtbot, tmp_path)
+    gate = threading.Event()
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+    win._start_worker(_BlockingWorker(gate), lambda _result: None, lambda _error: None)
+    qtbot.waitUntil(lambda: bool(win._running_threads()), timeout=1000)
+
+    event = QCloseEvent()
+    win.closeEvent(event)
+
+    assert not event.isAccepted()
+    assert win._close_when_idle is True
+    assert len(win._threads) == 1
+
+    gate.set()
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
+
+
+class _UnavailableCatalogSsh:
+    def run(self, _command):
+        raise RuntimeError("SSH: connection timed out")
+
+
+def test_cached_catalog_is_prominent_read_only_and_blocks_publish(
+    qtbot, tmp_path, monkeypatch
+):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    save_catalog_cache(
+        "conditioners",
+        [
+            CatalogRow(
+                key="cached-row",
+                source="breeze",
+                brand="Funai",
+                series="Снимок",
+                sizes="7 тыс. BTU",
+                stock_total=1,
+                has_card=True,
+                forced=False,
+                selected=False,
+            )
+        ],
+    )
+    win = MainWindow(
+        bridge_root=tmp_path,
+        config_path=cfg_path,
+        ssh=_UnavailableCatalogSsh(),
+    )
+    qtbot.addWidget(win)
+
+    with qtbot.waitSignal(win.refresh_stale, timeout=3000) as blocker:
+        win.refresh()
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
+
+    assert "connection timed out" in blocker.args[0]
+    assert win.model.rowCount() == 1
+    assert win.model.rows[0].selected is True
+    assert win._catalog_loaded is False
+    assert win._catalog_stale is True
+    assert not win.cache_warning.isHidden()
+    assert "КЭШ — ДАННЫЕ НЕ АКТУАЛЬНЫ" in win.cache_warning.text()
+    assert "КЭШ / НЕ АКТУАЛЬНО" in win.statusBar().currentMessage()
+    assert win.statusBar().property("error") is True
+    assert win.table.isEnabled()
+    selected_index = win.model.index(0, win.model.COL_SELECTED)
+    assert not (win.model.flags(selected_index) & Qt.ItemIsUserCheckable)
+    assert (
+        win.model.setData(selected_index, Qt.Unchecked, Qt.CheckStateRole)
+        is False
+    )
+    assert win.model.rows[0].selected is True
+    assert win.search.isEnabled()
+    assert win.act_refresh.isEnabled()
+    assert not win.act_publish.isEnabled()
+    assert not win.act_add.isEnabled()
+    assert not win.act_status.isEnabled()
+    assert not win.act_bulk_edit.isEnabled()
+
+    shown = {}
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        staticmethod(
+            lambda _parent, title, text: shown.update(title=title, text=text)
+        ),
+    )
+    win.publish()
+    assert shown["title"] == "Публикация заблокирована"
+    assert win._threads == []
+
+
+def test_fresh_refresh_leaves_cache_mode_and_reenables_catalog(qtbot, tmp_path):
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text("catalog:\n  selected_series: []\n", encoding="utf-8")
+    cached = CatalogRow(
+        key="cached-row",
+        source="breeze",
+        brand="Funai",
+        series="Снимок",
+        sizes="—",
+        stock_total=1,
+        has_card=False,
+        forced=False,
+        selected=True,
+    )
+    save_catalog_cache("conditioners", [cached])
+    win = MainWindow(
+        bridge_root=tmp_path,
+        config_path=cfg_path,
+        ssh=_UnavailableCatalogSsh(),
+    )
+    qtbot.addWidget(win)
+    with qtbot.waitSignal(win.refresh_stale, timeout=3000):
+        win.refresh()
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
+
+    win.ssh = FakeSsh()
+    with qtbot.waitSignal(win.refresh_done, timeout=3000):
+        win.refresh()
+    qtbot.waitUntil(lambda: not win._threads, timeout=3000)
+
+    assert win._catalog_stale is False
+    assert win._catalog_loaded is True
+    assert win.cache_warning.isHidden()
+    assert win.table.isEnabled()
+    assert win.act_publish.isEnabled()
+    assert "КЭШ" not in win.statusBar().currentMessage()

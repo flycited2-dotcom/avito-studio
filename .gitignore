@@ -8,4 +8,11 @@ dist-candidate/
 *.spec.bak
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+coverage-current.json
+htmlcov/
 .worktrees/

@@ -1,5 +1,6 @@
 import json
-from avito_studio.catalog_service import fetch_catalog, CatalogMember, CatalogRow
+
+from avito_studio.catalog_service import CatalogMember, fetch_catalog, fetch_local_catalog
 from avito_studio.local_config import LocalConfig
 
 FIXTURE_CFG = """\
@@ -14,7 +15,8 @@ FAKE_JSON = json.dumps({
         {"key": "breeze|funai|sensei 2.0", "source": "breeze", "brand": "Funai",
          "series": "Sensei 2.0", "category_id": 2, "stock_total": 5, "has_card": True,
          "forced": False, "members": [{"nc_code": "НС-1", "btu_calc": 7, "stock": 2,
-         "cost": 24000, "price": 25990, "price_ok": True, "forced": False},
+         "cost": 24000, "price": 25990, "price_ok": True, "forced": False,
+         "supplier_sku": "breeze:НС-1", "product_kind": "supplier"},
          {"nc_code": "НС-2", "btu_calc": 9, "stock": 3, "cost": 26000, "price": 27990,
           "price_ok": True, "forced": False}]},
         {"key": "daichi|midea|изи", "source": "daichi", "brand": "Midea", "series": "Изи",
@@ -52,7 +54,7 @@ def test_fetch_catalog_merges_remote_json_with_local_selection(tmp_path):
     assert sensei.representative_nc == "НС-1"          # первый член = репрезентативный (младший размер)
     assert sensei.price_range == "25990–27990 ₽"
     assert sensei.members == (
-        CatalogMember("НС-1", 25990, 24000, True, False),
+        CatalogMember("НС-1", 25990, 24000, True, False, "breeze:НС-1", "supplier"),
         CatalogMember("НС-2", 27990, 26000, True, False),
     )
     assert izy.price_range == "19990 ₽"
@@ -87,3 +89,27 @@ def test_fetch_catalog_survives_series_without_members(tmp_path):
     assert len(rows) == 1
     assert rows[0].representative_nc == ""
     assert rows[0].price_range == "—"
+
+
+def test_local_catalog_includes_profile_manual_products(tmp_path, monkeypatch):
+    config = tmp_path / "profile.yaml"
+    config.write_text("catalog: {selected_series: []}\n", encoding="utf-8")
+    loaded = object()
+    offers = [object()]
+    seen = {}
+    monkeypatch.setattr("avito_bridge.config.load_config", lambda path: loaded)
+    monkeypatch.setattr(
+        "avito_bridge.ingest.sources.fetch_profile_offers",
+        lambda cfg: offers,
+    )
+
+    def fake_catalog(received_offers, cfg):
+        seen["offers"] = received_offers
+        return {"series": []}
+
+    monkeypatch.setattr(
+        "avito_bridge.catalog_export.build_catalog_json", fake_catalog
+    )
+
+    assert fetch_local_catalog(config, LocalConfig(config)) == []
+    assert seen["offers"] is offers

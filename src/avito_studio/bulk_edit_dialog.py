@@ -28,7 +28,12 @@ from avito_studio.bulk_changes import (
 )
 from avito_studio.catalog_service import CatalogRow
 from avito_studio.local_config import LocalConfig
-from avito_studio.ui_components import FormSection, dialog_footer, dialog_header, role_button
+from avito_studio.ui_components import (
+    FormSection,
+    dialog_footer,
+    dialog_header,
+    role_button,
+)
 
 
 class BulkEditDialog(QDialog):
@@ -315,6 +320,7 @@ class BulkEditDialog(QDialog):
             len(preview.skipped_without_price)
             + len(preview.skipped_below_cost)
             + len(preview.skipped_forced_reset)
+            + len(preview.skipped_manual_reset)
         )
         self.preview_label.setText(
             f"Выбрано серий: {len(self.selected_keys())} · публикация: "
@@ -351,6 +357,13 @@ class BulkEditDialog(QDialog):
             self._append_preview_row((nc_code, "—", "—", "Нет цены — пропущено"))
         for nc_code in preview.skipped_forced_reset:
             self._append_preview_row((nc_code, "—", "—", "Нельзя сбросить — пропущено"))
+        for nc_code in preview.skipped_manual_reset:
+            self._append_preview_row((
+                nc_code,
+                "—",
+                "—",
+                "У ручного товара нет автоцены — пропущено",
+            ))
         self.preview_table.resizeColumnsToContents()
 
     def _apply(self) -> None:
@@ -367,7 +380,7 @@ class BulkEditDialog(QDialog):
             return
         try:
             apply_bulk_preview(self.local_cfg, self.preview)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - the dialog must report every persistence failure
             QMessageBox.critical(self, "Изменения не сохранены", str(exc))
             return
         self.applied.emit(self.preview)

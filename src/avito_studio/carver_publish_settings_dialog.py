@@ -1,7 +1,10 @@
 """One-time, user-facing setup of the CARVER Avito feed."""
 from __future__ import annotations
 
+import os
+from copy import deepcopy
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -17,8 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from avito_studio.carver_price_file import import_carver_price, validate_carver_price
+from avito_studio.atomic_io import atomic_write_text
 from avito_studio.local_config import LocalConfig
-from avito_studio.carver_price_file import import_carver_price
 from avito_studio.ui_components import (
     FormSection,
     dialog_footer,
@@ -26,7 +30,6 @@ from avito_studio.ui_components import (
     get_open_file_name,
     role_button,
 )
-
 
 ROUNDING_OPTIONS = (
     ("Без округления", "none"),
@@ -42,6 +45,7 @@ class CarverPublishSettingsDialog(QDialog):
     def __init__(self, local_cfg: LocalConfig, parent=None):
         super().__init__(parent)
         self.local_cfg = local_cfg
+        self._pending_price_path: Path | None = None
         values = local_cfg.get_publication_settings()
         self.setWindowTitle("Настройка публикации CARVER")
         self.resize(700, 650)
@@ -186,19 +190,39 @@ class CarverPublishSettingsDialog(QDialog):
         if not selected:
             return
         try:
-            bridge_root = self.local_cfg.path.resolve().parent.parent
-            target, count = import_carver_price(Path(selected), bridge_root)
-        except Exception as exc:
+            candidate = Path(selected).resolve()
+            count = validate_carver_price(candidate)
+        except Exception as exc:  # noqa: BLE001 - UI boundary must report malformed Excel
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "Прайс не принят", str(exc))
             return
-        self.price_path_input.setText(str(target))
-        self.pricing_hint.setText(f"Прайс проверен: {count} позиций и встроенные фото найдены.")
+        self._pending_price_path = candidate
+        self.price_path_input.setText(str(candidate))
+        self.pricing_hint.setText(
+            f"Прайс проверен: {count} позиций и встроенные фото найдены. "
+            "Файл будет установлен только после «Сохранить настройки»."
+        )
 
     def _validate_and_accept(self) -> None:
         if not self.price_path_input.text().strip():
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Выберите прайс", "Сначала выберите и проверьте Excel CARVER.")
+            return
+        configured = Path(self.price_path_input.text().strip()).expanduser()
+        bridge_root = self.local_cfg.path.resolve().parent.parent
+        if not configured.is_absolute():
+            configured = bridge_root / configured
+        installed = bridge_root / "runtime" / "carver" / "current.xlsx"
+        if self._pending_price_path is None and (
+            not configured.is_file()
+            or configured.resolve() != installed.resolve(strict=False)
+        ):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Выберите прайс",
+                "Сохранённый XLSX-прайс не найден. Выберите свежий файл CARVER.",
+            )
             return
         if (not self.category_input.text().strip()
                 or not self.goods_type_input.text().strip()
@@ -222,14 +246,62 @@ class CarverPublishSettingsDialog(QDialog):
 
     def save(self) -> None:
         """Save only after the dialog has passed its local validation."""
-        self.local_cfg.set_publication_settings(
-            category=self.category_input.text(),
-            goods_type=self.goods_type_input.text(),
-            goods_subtype=self.goods_subtype_input.text(),
-            markup_pct=self.markup_input.value(),
-            rounding=str(self.rounding_combo.currentData()),
-            price_confirmed=self.price_confirmed.isChecked(),
+        old_data = deepcopy(self.local_cfg.data)
+        old_text = self.local_cfg.path.read_text(encoding="utf-8")
+        committed_path: Path | None = None
+        bridge_root = self.local_cfg.path.resolve().parent.parent
+        target = bridge_root / "runtime" / "carver" / "current.xlsx"
+        source_is_target = (
+            self._pending_price_path is not None
+            and self._pending_price_path.resolve() == target.resolve(strict=False)
         )
-        if self.price_path_input.text().strip():
-            self.local_cfg.set_source_path(Path(self.price_path_input.text()))
-        self.local_cfg.save()
+        backup: Path | None = None
+        if self._pending_price_path is not None and target.exists() and not source_is_target:
+            backup = target.with_name(f".current.backup.{uuid4().hex}.xlsx")
+            os.replace(target, backup)
+        try:
+            if self._pending_price_path is not None:
+                committed_path, _count = import_carver_price(
+                    self._pending_price_path, bridge_root)
+            self.local_cfg.set_publication_settings(
+                category=self.category_input.text(),
+                goods_type=self.goods_type_input.text(),
+                goods_subtype=self.goods_subtype_input.text(),
+                markup_pct=self.markup_input.value(),
+                rounding=str(self.rounding_combo.currentData()),
+                price_confirmed=self.price_confirmed.isChecked(),
+            )
+            source_path = committed_path or (
+                Path(self.price_path_input.text())
+                if self.price_path_input.text().strip()
+                else None
+            )
+            if source_path is not None:
+                if not source_path.is_absolute():
+                    source_path = bridge_root / source_path
+                self.local_cfg.set_source_path(
+                    source_path,
+                    relative_to=bridge_root,
+                )
+            self.local_cfg.save()
+        except Exception:
+            self.local_cfg.data = old_data
+            try:
+                if self.local_cfg.path.read_text(encoding="utf-8") != old_text:
+                    atomic_write_text(self.local_cfg.path, old_text)
+                if committed_path is not None and not source_is_target:
+                    committed_path.unlink(missing_ok=True)
+                if backup is not None:
+                    os.replace(backup, target)
+                    backup = None
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    "Не удалось сохранить настройки CARVER и полностью "
+                    f"восстановить предыдущие файлы. Резервная копия: {backup}"
+                ) from rollback_error
+            raise
+        if backup is not None:
+            backup.unlink(missing_ok=True)
+        self._pending_price_path = None
+        if committed_path is not None:
+            self.price_path_input.setText(str(committed_path))
