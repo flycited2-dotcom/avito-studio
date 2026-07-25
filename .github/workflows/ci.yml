@@ -17,6 +17,7 @@ jobs:
   windows:
     name: Paired tests and Windows build
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out Studio
@@ -76,7 +77,24 @@ jobs:
         working-directory: avito-studio
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m coverage run -m pytest -q --disable-socket
+        shell: pwsh
+        run: |
+          python -m coverage erase
+          # Isolate Qt files in separate processes.  This prevents a sporadic
+          # Windows/PySide teardown stall from blocking the whole suite while
+          # still combining branch coverage across every collected test.
+          $testFiles = Get-ChildItem -LiteralPath "tests" -Filter "test_*.py" |
+            Sort-Object Name
+          foreach ($testFile in $testFiles) {
+            Write-Output "::group::$($testFile.Name)"
+            python -m coverage run --parallel-mode -m pytest -q --disable-socket $testFile.FullName
+            $exitCode = $LASTEXITCODE
+            Write-Output "::endgroup::"
+            if ($exitCode -ne 0) {
+              exit $exitCode
+            }
+          }
+          python -m coverage combine
 
       - name: Enforce Studio source coverage
         working-directory: avito-studio
