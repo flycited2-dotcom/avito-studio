@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Tests and Windows build
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out Studio
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: avito-studio
+
+      - name: Read compatible Bridge revision
+        id: bridge
+        shell: pwsh
+        run: |
+          $revision = (Get-Content avito-studio/bridge.lock -Raw).Trim()
+          "revision=$revision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Check out Bridge
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: flycited2-dotcom/avito_agent_load
+          ref: ${{ steps.bridge.outputs.revision }}
+          path: avito-bridge
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            avito-studio/pyproject.toml
+            avito-bridge/pyproject.toml
+
+      - name: Install Bridge and Studio
+        run: |
+          python -m pip install -e "./avito-bridge[dev]"
+          python -m pip install -e "./avito-studio[dev]"
+
+      - name: Run paired test suite
+        working-directory: avito-studio
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Build Windows executable
+        working-directory: avito-studio
+        run: python -m PyInstaller --noconfirm --clean avito_studio.spec
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AvitoContentStudio-windows
+          path: avito-studio/dist/AvitoContentStudio.exe
+          if-no-files-found: error

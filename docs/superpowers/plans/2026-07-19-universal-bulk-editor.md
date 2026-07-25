@@ -8,6 +8,14 @@
 
 **Tech Stack:** Python 3.11+, PySide6, ruamel.yaml, pytest, pytest-qt, PyInstaller.
 
+## Статус на 2026-07-25
+
+- Tasks 1–6 реализованы в ветках `agent/catalog-member-costs` и `agent/universal-bulk-editor`.
+- Bridge `0.2.0`: `192 passed`; Studio `0.2.0` вместе с закреплённой ревизией Bridge: `191 passed`.
+- Windows EXE собран PyInstaller и прошёл startup-smoke: процесс остаётся живым и отвечает.
+- Реальные рабочие YAML и публикация на Avito не изменялись. Конкретная операция над каталогом остаётся
+  отдельным операторским действием после проверки данных и не является частью merge.
+
 ## Global Constraints
 
 - Одна операция работает только с текущим профилем.
@@ -28,17 +36,17 @@
 **Interfaces:**
 - Produces: JSON member fields `cost: int | null`, `price: int | null`, `price_ok: bool`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Добавить проверку в `test_catalog_export.py`, что член с `Offer(cost=Decimal("10000"))` экспортирует `cost == 10000`, а предложение без закупочной цены экспортирует `cost is None`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_catalog_export.py -q`
 
 Expected: FAIL по отсутствующему ключу `cost`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 В `_member_json` добавить:
 
@@ -55,7 +63,7 @@ return {
 }
 ```
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `pytest tests/test_catalog_export.py tests/test_pricing.py -q`
 
@@ -74,7 +82,7 @@ Commit only the two bridge files with message `feat: expose catalog member costs
 - Produces: `CatalogMember(nc_code: str, current_price: int | None, cost: int | None, price_ok: bool, forced: bool)`.
 - Produces: `CatalogRow.members: tuple[CatalogMember, ...]` with an empty default for existing tests.
 
-- [ ] **Step 1: Write the failing catalog test**
+- [x] **Step 1: Write the failing catalog test**
 
 Расширить `FAKE_JSON` полями `cost` и проверить:
 
@@ -85,13 +93,13 @@ assert sensei.members == (
 )
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_catalog_service.py -q`
 
 Expected: FAIL при импорте отсутствующего `CatalogMember`.
 
-- [ ] **Step 3: Add the immutable member model**
+- [x] **Step 3: Add the immutable member model**
 
 ```python
 @dataclass(frozen=True)
@@ -105,11 +113,11 @@ class CatalogMember:
 
 Добавить в `CatalogRow` поле `members: tuple[CatalogMember, ...] = ()` и в `_rows_from_data` преобразовать каждый JSON member, нормализуя отсутствующий `cost` в `None` для обратной совместимости.
 
-- [ ] **Step 4: Update direct CatalogRow fixtures**
+- [x] **Step 4: Update direct CatalogRow fixtures**
 
 Существующие конструкторы не менять: пустой default обязан сохранить совместимость. В `FakeSsh` добавить `cost`, чтобы интеграционные тесты проверяли новый контракт.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `pytest tests/test_catalog_service.py tests/test_main_window.py -q`
 
@@ -127,7 +135,7 @@ Commit with message `feat: retain catalog member prices`.
 - Produces: `BulkRequest`, `MemberPriceChange`, `SeriesChange`, `BulkPreview`.
 - Produces: `build_bulk_preview(rows: list[CatalogRow], request: BulkRequest) -> BulkPreview`.
 
-- [ ] **Step 1: Write failing tests for selection and price rules**
+- [x] **Step 1: Write failing tests for selection and price rules**
 
 Покрыть следующие случаи отдельными тестами:
 
@@ -147,13 +155,13 @@ assert preview.skipped_below_cost == ("B-1",)
 
 Также проверить режимы `amount`, `fixed`, `reset`, пустой выбор, неизвестный key, некорректный процент `-100`, модель без цены и изменение публикации без цены.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_bulk_changes.py -q`
 
 Expected: FAIL с `ModuleNotFoundError`.
 
-- [ ] **Step 3: Implement value objects**
+- [x] **Step 3: Implement value objects**
 
 Использовать frozen dataclasses и точные литералы:
 
@@ -170,11 +178,11 @@ class BulkRequest:
 
 `MemberPriceChange` хранит `nc_code`, `old_price`, `new_price`, `forced`; `SeriesChange` — key и старое/новое состояние; `BulkPreview` — изменения, неизвестные ключи, пропуски без цены и ниже закупки.
 
-- [ ] **Step 4: Implement deterministic pricing**
+- [x] **Step 4: Implement deterministic pricing**
 
 Процент и сумма используют `Decimal`; результат округляется до целого `ROUND_HALF_UP`. Для `percent` допустим диапазон `(-100, 10000]`. Для `fixed` требуется положительное значение. Если рассчитанная цена ниже известного `cost`, модель попадает в `skipped_below_cost`. `reset` создаёт изменение с `new_price=None`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `pytest tests/test_bulk_changes.py -q`
 
@@ -194,23 +202,23 @@ Commit with message `feat: calculate bulk catalog changes`.
 - Produces: `apply_bulk_preview(local_cfg: LocalConfig, preview: BulkPreview) -> None`.
 - Produces: `LocalConfig.has_force_include(nc_code: str) -> bool`.
 
-- [ ] **Step 1: Write failing application tests**
+- [x] **Step 1: Write failing application tests**
 
 Проверить одним reload YAML, что обычная модель записана в `manual_price_override`, forced-модель меняет `force_include.price`, `reset` удаляет обычный override, публикация меняет `selected_series`, а `save()` вызывается один раз после всех изменений.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_bulk_changes.py tests/test_local_config.py -q`
 
 Expected: FAIL по отсутствующим функциям.
 
-- [ ] **Step 3: Implement local mutations**
+- [x] **Step 3: Implement local mutations**
 
 `apply_bulk_preview` сначала проверяет, что preview не содержит неизвестных ключей и имеет хотя бы одно изменение. Затем применяет публикацию, forced-цены через `set_force_price`, обычные цены через `set_manual_price`, reset через `remove_manual_price`, и вызывает `local_cfg.save()` ровно один раз.
 
 Forced-модель нельзя сбросить к авто, потому что её цена является обязательной частью `force_include`; она попадает в явный список пропусков preview.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `pytest tests/test_bulk_changes.py tests/test_local_config.py -q`
 
@@ -228,7 +236,7 @@ Commit with message `feat: apply bulk changes atomically`.
 - Consumes: `build_bulk_preview` and `apply_bulk_preview`.
 - Produces: `BulkEditDialog(rows, local_cfg, parent=None)` with `applied = Signal(BulkPreview)`.
 
-- [ ] **Step 1: Write failing UI tests**
+- [x] **Step 1: Write failing UI tests**
 
 С помощью `pytest-qt` проверить:
 
@@ -240,23 +248,23 @@ Commit with message `feat: apply bulk changes atomically`.
 - кнопка применения выключена при пустом выборе или ошибочном значении;
 - подтверждение вызывает `apply_bulk_preview`, отклонение не меняет YAML.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_bulk_edit_dialog.py -q`
 
 Expected: FAIL с `ModuleNotFoundError`.
 
-- [ ] **Step 3: Build the dialog in existing UI style**
+- [x] **Step 3: Build the dialog in existing UI style**
 
 Использовать `dialog_header`, `FormSection`, `dialog_footer` и `role_button`. Диалог содержит поиск, таблицу с чекбоксом выбора, бренд, товар/серию, публикацию и диапазон цен; комбобокс публикации; комбобокс режима цены; числовое значение; таблицу preview; счётчики изменений и пропусков; «Отмена» и «Применить локально».
 
 Изменение любого контрола пересобирает preview. Перед применением показать `QMessageBox.question` с количеством серий и модельных цен. Это подтверждение локальной массовой операции, не публикация.
 
-- [ ] **Step 4: Make the dialog keyboard-accessible**
+- [x] **Step 4: Make the dialog keyboard-accessible**
 
 Задать понятные accessible names, tab order и shortcut `Ctrl+Shift+B` на действие главного окна. Кнопка применения становится default только при валидном preview.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `pytest tests/test_bulk_edit_dialog.py tests/test_ui_style_contract.py -q`
 
@@ -274,21 +282,21 @@ Commit with message `feat: add universal bulk editor dialog`.
 - Consumes: `BulkEditDialog.applied`.
 - Produces: toolbar action `Массовое изменение` visible for every profile.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 Проверить, что действие видимо для conditioners, wreaths, appliances и carver; shortcut зарегистрирован; успешный dialog обновляет модель и dashboard; отмена не меняет конфигурацию; действие выключается во время refresh/deploy.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_main_window.py -q`
 
 Expected: FAIL по отсутствующему action.
 
-- [ ] **Step 3: Add and wire the action**
+- [x] **Step 3: Add and wire the action**
 
 Создать QAction `Массовое изменение`, добавить `QKeySequence("Ctrl+Shift+B")`, включить в catalog toolbar и `_busy_actions`. `_open_bulk_edit_dialog` передаёт `self.model.rows` и `self.local_cfg`; после `applied` обновляет `row.selected`, price labels из preview, dashboard и status bar без сетевой публикации.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 Run: `pytest tests/test_main_window.py tests/test_catalog_table_model.py -q`
 
@@ -302,19 +310,19 @@ Commit with message `feat: wire bulk editor into catalog`.
 - Verify: both repositories
 - Build output: `dist/AvitoContentStudio.exe`
 
-- [ ] **Step 1: Run bridge tests**
+- [x] **Step 1: Run bridge tests**
 
 Run in `avito-bridge`: `pytest -q`
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run Studio tests**
+- [x] **Step 2: Run Studio tests**
 
 Run in `avito-studio`: `pytest -q`
 
 Expected: all tests pass; pre-existing unrelated `tests/test_pricing.py` is reported separately if it is not part of tracked suite.
 
-- [ ] **Step 3: Build the application**
+- [x] **Step 3: Build the application**
 
 Run: `pyinstaller --noconfirm avito_studio.spec`
 
