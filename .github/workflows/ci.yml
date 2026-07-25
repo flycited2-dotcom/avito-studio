@@ -85,16 +85,73 @@ jobs:
           # still combining branch coverage across every collected test.
           $testFiles = Get-ChildItem -LiteralPath "tests" -Filter "test_*.py" |
             Sort-Object Name
+          $python = (Get-Command python).Source
+          $coverageDir = Join-Path $env:RUNNER_TEMP "studio-coverage-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Path $coverageDir -Force | Out-Null
+          $env:PYTHONUNBUFFERED = "1"
           foreach ($testFile in $testFiles) {
             Write-Output "::group::$($testFile.Name)"
-            python -m coverage run --parallel-mode -m pytest -q --disable-socket $testFile.FullName
-            $exitCode = $LASTEXITCODE
+            $passed = $false
+            foreach ($attempt in 1..2) {
+              $stdout = Join-Path $env:RUNNER_TEMP "$($testFile.BaseName)-$attempt.stdout.log"
+              $stderr = Join-Path $env:RUNNER_TEMP "$($testFile.BaseName)-$attempt.stderr.log"
+              # coverage combine discovers shards only under the .coverage.*
+              # prefix, so keep the first separator as a dot.
+              $coverageBaseName = ".coverage.$($testFile.BaseName).$attempt"
+              $env:COVERAGE_FILE = Join-Path $coverageDir $coverageBaseName
+              $arguments = @(
+                "-m", "coverage", "run", "--parallel-mode",
+                "-m", "pytest", "-q", "--disable-socket", $testFile.FullName
+              )
+              $process = Start-Process `
+                -FilePath $python `
+                -ArgumentList $arguments `
+                -WorkingDirectory (Get-Location).Path `
+                -RedirectStandardOutput $stdout `
+                -RedirectStandardError $stderr `
+                -WindowStyle Hidden `
+                -PassThru
+              $finished = $process.WaitForExit(120000)
+              if (-not $finished) {
+                try {
+                  $process.Kill($true)
+                } catch {
+                  if (-not $process.HasExited) {
+                    throw
+                  }
+                }
+                $process.WaitForExit()
+                Write-Warning "$($testFile.Name) timed out on attempt $attempt"
+                Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue
+                Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue
+                Get-ChildItem -LiteralPath $coverageDir -File |
+                  Where-Object {
+                    $_.Name -eq $coverageBaseName -or
+                    $_.Name.StartsWith("$coverageBaseName.")
+                  } |
+                  Remove-Item
+                if ($attempt -eq 2) {
+                  throw "$($testFile.Name) timed out twice"
+                }
+                continue
+              }
+              # Drain redirected streams before reading logs and ExitCode.
+              $process.WaitForExit()
+              Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue
+              Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue
+              if ($process.ExitCode -ne 0) {
+                exit $process.ExitCode
+              }
+              $passed = $true
+              break
+            }
             Write-Output "::endgroup::"
-            if ($exitCode -ne 0) {
-              exit $exitCode
+            if (-not $passed) {
+              exit 1
             }
           }
-          python -m coverage combine
+          Remove-Item Env:COVERAGE_FILE
+          python -m coverage combine $coverageDir
 
       - name: Enforce Studio source coverage
         working-directory: avito-studio
