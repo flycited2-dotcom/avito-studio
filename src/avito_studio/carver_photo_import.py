@@ -5,6 +5,7 @@ from pathlib import Path
 
 from avito_bridge.config import load_config
 from avito_bridge.ingest.carver_xlsx import extract_embedded_photos
+from avito_studio.carver_price_file import resolve_carver_price_path
 from avito_studio.photo_upload import upload_manual_photo_bytes
 
 
@@ -14,10 +15,14 @@ def import_carver_photos(ssh, config_path: Path, rows, local_cfg) -> tuple[int, 
     Возвращает (найдено, загружено, сохранено владельцем). Позиции намеренно не
     выбираются для публикации: фото и готовность объявления — разные решения.
     """
-    cfg = load_config(Path(config_path))
-    price_path = (cfg.source_options or {}).get("path", "")
-    if not price_path or not Path(price_path).exists():
-        raise ValueError(f"Прайс CARVER не найден: {price_path!r}")
+    config_path = Path(config_path)
+    cfg = load_config(config_path)
+    configured_path = (cfg.source_options or {}).get("path", "")
+    if not configured_path:
+        raise ValueError("Прайс CARVER не настроен.")
+    price_path = resolve_carver_price_path(config_path, configured_path)
+    if not price_path.is_file():
+        raise ValueError(f"Прайс CARVER не найден: {str(price_path)!r}")
     embedded = extract_embedded_photos(price_path)
     by_article = {row.representative_nc: row for row in rows if row.representative_nc}
     articles = [article for article in by_article if article in embedded]

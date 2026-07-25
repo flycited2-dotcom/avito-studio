@@ -195,6 +195,14 @@ QPushButton[accent="true"]:disabled { background: #a9d9bf; color: #ffffff; }
 
 QStatusBar { background: #ffffff; border-top: 1px solid #d7e3eb; color: #60758d; }
 QStatusBar[error="true"] { color: #c62828; font-weight: 600; }
+QLabel#cacheWarning {
+    background: #fff3cd;
+    color: #7a4300;
+    border-top: 1px solid #e7b94e;
+    border-bottom: 1px solid #e7b94e;
+    padding: 10px 24px;
+    font-weight: 700;
+}
 
 QLabel[hint="true"] { color: #77808c; }
 QLabel[fieldError="true"] { color: #c62828; font-size: 10px; }

@@ -1,28 +1,63 @@
 from __future__ import annotations
+
+import logging
 from dataclasses import replace
 from pathlib import Path
-from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel
-from PySide6.QtWidgets import (QMainWindow, QTableView, QToolBar, QLineEdit, QStyle,
-                               QStatusBar, QWidget, QVBoxLayout, QHBoxLayout, QMessageBox,
-                               QHeaderView, QAbstractItemView, QComboBox, QLabel, QFrame,
-                               QPushButton, QToolButton, QStackedWidget, QSizePolicy,
-                               QButtonGroup)
+
+from PySide6.QtCore import QSortFilterProxyModel, Qt, QTimer, Signal, Slot
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QComboBox,
+    QFrame,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QInputDialog,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QStatusBar,
+    QStyle,
+    QTableView,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from avito_studio import publish_summary
+from avito_studio.catalog_table_model import CatalogTableModel
 from avito_studio.local_config import LocalConfig
 from avito_studio.profiles import PROFILES, Profile
-from avito_studio.catalog_table_model import CatalogTableModel
-from avito_studio.workers import (RefreshWorker, DeployWorker, AvitoStatusWorker,
-                                  CarverPhotoImportWorker, run_in_thread)
-from avito_studio import publish_summary
+from avito_studio.version import __version__, bridge_revision
+from avito_studio.workers import (
+    AppliancesPriceImportWorker,
+    AvitoStatusWorker,
+    CarverPhotoImportWorker,
+    ContentCardImportWorker,
+    DeployWorker,
+    RefreshWorker,
+    run_in_thread,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
     refresh_done = Signal()
+    refresh_stale = Signal(str)
     deploy_done = Signal()
     publish_failed = Signal(str)
+    appliances_price_import_done = Signal(str, int)
 
     def __init__(self, bridge_root: Path, config_path: Path, ssh, snapshot_dir: Path | None = None):
         super().__init__()
-        self.setWindowTitle("Avito Content Studio")
+        self.setWindowTitle(f"Avito Content Studio {__version__}")
         self.bridge_root = Path(bridge_root)
         self.config_path = Path(config_path)
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else publish_summary.DEFAULT_SNAPSHOT_DIR
@@ -33,6 +68,9 @@ class MainWindow(QMainWindow):
         self._initial_config_path = self.config_path
         self.local_cfg = LocalConfig(self.config_path)
         self.model = CatalogTableModel([])
+        self._catalog_loaded = False
+        self._catalog_stale = False
+        self._catalog_stale_reason = ""
         self.proxy = QSortFilterProxyModel()
         self.proxy.setSourceModel(self.model)
         self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
@@ -74,6 +112,9 @@ class MainWindow(QMainWindow):
         self.act_import_cards = self._action(
             style.standardIcon(QStyle.SP_DialogOpenButton),
             "Взять фото из Контент-завода", self._import_content_cards)
+        self.act_appliances_price = self._action(
+            style.standardIcon(QStyle.SP_DialogOpenButton),
+            "Импортировать XLS-прайс", self._open_appliances_price_import)
         act_refresh = self._action(style.standardIcon(QStyle.SP_BrowserReload),
                                    "Обновить каталог", self.refresh)
         self.act_publish = self._action(style.standardIcon(QStyle.SP_DialogApplyButton),
@@ -85,6 +126,9 @@ class MainWindow(QMainWindow):
                                "Добавить товар", self._open_add_forced_dialog)
         act_status = self._action(style.standardIcon(QStyle.SP_MessageBoxInformation),
                                   "Статусы Avito", self._refresh_avito_status)
+        self.act_refresh = act_refresh
+        self.act_add = act_add
+        self.act_status = act_status
         self.act_bulk_edit = self._action(
             style.standardIcon(QStyle.SP_FileDialogListView),
             "Массовое изменение", self._open_bulk_edit_dialog)
@@ -92,7 +136,12 @@ class MainWindow(QMainWindow):
         # пока идёт фоновая операция — все действия выключены (повторный клик по «Опубликовать»
         # иначе запустил бы ВТОРОЙ параллельный деплой на боевой сервер)
         self._busy_actions = [
-            act_refresh, self.act_publish, act_add, act_status, self.act_bulk_edit]
+            act_refresh,
+            self.act_publish,
+            act_add,
+            act_status,
+            self.act_bulk_edit,
+        ]
         self.act_import_cards.setEnabled(False)
 
         central = QWidget(objectName="appShell")
@@ -106,6 +155,12 @@ class MainWindow(QMainWindow):
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
         workspace_layout.addWidget(self._build_header())
+        self.cache_warning = self._label("", "cacheWarning")
+        self.cache_warning.setWordWrap(True)
+        self.cache_warning.setTextFormat(Qt.PlainText)
+        self.cache_warning.setAccessibleName("Предупреждение об устаревшем кэше")
+        self.cache_warning.setVisible(False)
+        workspace_layout.addWidget(self.cache_warning)
 
         self.pages = QStackedWidget(objectName="pages")
         self.pages.addWidget(self._build_overview_page(act_refresh))
@@ -115,9 +170,14 @@ class MainWindow(QMainWindow):
         shell.addWidget(workspace, 1)
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar())
+        settings_menu = self.menuBar().addMenu("Настройки")
+        settings_menu.addAction("SSH-подключение…", self._configure_connection)
+        help_menu = self.menuBar().addMenu("Справка")
+        help_menu.addAction("О программе…", self._show_about)
         self.statusBar().showMessage("Нажмите «Обновить», чтобы загрузить каталог с сервера")
 
         self._threads = []   # держим ссылки, чтобы QThread не собрался раньше времени
+        self._close_when_idle = False
         self._set_busy(False)
         self._show_page(0)
         self._update_dashboard([])
@@ -129,6 +189,36 @@ class MainWindow(QMainWindow):
         action.triggered.connect(slot)
         self.addAction(action)
         return action
+
+    def _configure_connection(self) -> None:
+        """Change connection settings without touching or testing production."""
+        host, accepted = QInputDialog.getText(
+            self,
+            "SSH-подключение",
+            "Сервер (user@host):",
+            text=str(getattr(self.ssh, "host", "")),
+        )
+        if not accepted:
+            return
+        current_key = str(getattr(self.ssh, "key_path", ""))
+        key_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите приватный SSH-ключ",
+            current_key,
+            "SSH private key (*)",
+        )
+        if not key_path:
+            return
+        try:
+            from avito_studio.app import save_connection_settings
+
+            safe_host, safe_key = save_connection_settings(host, key_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Настройки не сохранены", str(exc))
+            return
+        self.ssh.host = safe_host
+        self.ssh.key_path = safe_key
+        self._status("SSH-подключение сохранено. Проверка выполнится при обновлении.", 6000)
 
     @staticmethod
     def _label(text: str, object_name: str) -> QLabel:
@@ -246,6 +336,13 @@ class MainWindow(QMainWindow):
             self.act_carver_settings, "Настроить CARVER", "Категория, тип товара и розничная цена")
         self.carver_settings_card.setVisible(False)
         actions.addWidget(self.carver_settings_card)
+        self.appliances_price_card = self._action_card(
+            self.act_appliances_price,
+            "Импортировать прайс",
+            "Проверка и локальное сохранение XLS без публикации",
+        )
+        self.appliances_price_card.setVisible(False)
+        actions.addWidget(self.appliances_price_card)
         layout.addLayout(actions)
 
         catalog_card = QFrame(objectName="panelCard")
@@ -301,6 +398,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar(objectName="catalogToolbar")
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toolbar.addAction(self.act_appliances_price)
         toolbar.addAction(self.act_import_cards)
         toolbar.addAction(act_refresh)
         toolbar.addAction(self.act_carver_settings)
@@ -312,6 +410,7 @@ class MainWindow(QMainWindow):
         # Та же иерархия действий, что в карточках и диалогах.
         publish_button = toolbar.widgetForAction(act_publish)
         settings_button = toolbar.widgetForAction(self.act_carver_settings)
+        price_button = toolbar.widgetForAction(self.act_appliances_price)
         add_button = toolbar.widgetForAction(act_add)
         if publish_button:
             publish_button.setProperty("role", "primary")
@@ -319,6 +418,8 @@ class MainWindow(QMainWindow):
             add_button.setProperty("role", "secondary")
         if settings_button:
             settings_button.setProperty("role", "secondary")
+        if price_button:
+            price_button.setProperty("role", "secondary")
         layout.addWidget(toolbar)
 
         filters = QFrame(objectName="filterCard")
@@ -364,27 +465,97 @@ class MainWindow(QMainWindow):
         self.stat_selected_value.setText(str(selected))
         self.stat_cards_value.setText(str(with_cards))
         self.stat_issues_value.setText(str(attention))
+        stale_suffix = " · КЭШ, ДАННЫЕ НЕ АКТУАЛЬНЫ" if self._catalog_stale else ""
         self.overview_catalog_text.setText(
-            f"{self.profile.label}: {total} серий · выбрано {selected} · с фото {with_cards}.")
+            f"{self.profile.label}: {total} серий · выбрано {selected} · "
+            f"с фото {with_cards}{stale_suffix}.")
         self.catalog_caption.setText(
-            f"{total} серий · выбрано для публикации {selected} · двойной клик открывает карточку")
+            f"{total} серий · выбрано для публикации {selected}{stale_suffix} · "
+            + (
+                "режим только чтение"
+                if self._catalog_stale
+                else "двойной клик открывает карточку"
+            )
+        )
 
     def closeEvent(self, event) -> None:
-        # QThread, уничтоженный вместе с окном во время работы, роняет ВЕСЬ процесс
-        # (Qt fatal «Destroyed while thread is still running») — дожидаемся фоновых потоков
-        for t in self._threads:
+        # quit() не прерывает выполняющийся worker.run(). Раньше окно ждало лишь 3 секунды,
+        # затем уничтожало всё ещё работающий QThread и могло уронить процесс. Теперь закрытие
+        # откладывается до штатного завершения операции.
+        if self._running_threads():
+            first_request = not self._close_when_idle
+            self._close_when_idle = True
+            event.ignore()
+            self._status(
+                "Окно закроется после завершения текущей операции. Не выключайте компьютер.",
+                error=False,
+            )
+            if first_request:
+                QMessageBox.information(
+                    self,
+                    "Операция ещё выполняется",
+                    "Studio безопасно завершит текущую операцию и затем закроется автоматически.",
+                )
+            return
+        if self.model.dirty_keys:
             try:
-                t.quit()
-                t.wait(3000)
-            except RuntimeError:
-                pass   # поток уже завершился и удалён (deleteLater) — обёртка Python пережила C++
+                self.save_local_selection()
+            except Exception as exc:
+                event.ignore()
+                QMessageBox.critical(
+                    self,
+                    "Изменения не сохранены",
+                    f"Окно осталось открытым: не удалось сохранить выбор товаров.\n\n{exc}",
+                )
+                return
+        self._close_when_idle = False
         super().closeEvent(event)
+
+    def _running_threads(self) -> list:
+        running = []
+        for thread in list(self._threads):
+            try:
+                if thread.isRunning():
+                    running.append(thread)
+                else:
+                    self._threads.remove(thread)
+            except RuntimeError:
+                self._threads.remove(thread)
+        return running
+
+    def _start_worker(self, worker, on_finished, on_failed, *, on_stale=None):
+        # Регистрируем поток ДО start(): быстрый worker может успеть завершиться до возврата
+        # run_in_thread(), если стартовать его сразу.
+        thread = run_in_thread(
+            worker,
+            on_finished,
+            on_failed,
+            on_stale=on_stale,
+            on_thread_finished=self._on_worker_thread_finished,
+            start=False,
+        )
+        self._threads.append(thread)
+        thread.start()
+        return thread
+
+    @Slot()
+    def _on_worker_thread_finished(self) -> None:
+        finished = self.sender()
+        self._threads = [thread for thread in self._threads if thread is not finished]
+        if self._close_when_idle and not self._running_threads():
+            QTimer.singleShot(0, self.close)
 
     def _set_busy(self, busy: bool) -> None:
         for act in self._busy_actions:
             act.setEnabled(not busy)
         self.profile_combo.setEnabled(not busy)   # смена профиля посреди публикации = каша путей
-        self.act_publish.setEnabled(not busy and self.profile.publish_enabled)
+        # В кэш-режиме таблица доступна для поиска и прокрутки, но модель
+        # снимает checkable-флаг и отвергает любые изменения.
+        self.table.setEnabled(not busy)
+        self.search.setEnabled(not busy)
+        self.act_publish.setEnabled(
+            not busy and self.profile.publish_enabled and not self._catalog_stale
+        )
         can_import = self.profile.key in {"appliances", "carver"}
         self.act_import_cards.setEnabled(not busy and can_import)
         self.act_import_cards.setText(
@@ -393,9 +564,21 @@ class MainWindow(QMainWindow):
         carver_active = self.profile.key == "carver"
         self.act_carver_settings.setVisible(carver_active)
         self.act_carver_settings.setEnabled(not busy and carver_active)
+        appliances_active = self.profile.key == "appliances"
+        self.act_appliances_price.setVisible(appliances_active)
+        self.act_appliances_price.setEnabled(not busy and appliances_active)
+        if hasattr(self, "appliances_price_card"):
+            self.appliances_price_card.setVisible(appliances_active)
         if hasattr(self, "carver_settings_card"):
             self.carver_settings_card.setVisible(carver_active)
-        if self.profile.publish_enabled:
+        if self._catalog_stale:
+            for action in (self.act_add, self.act_status, self.act_bulk_edit):
+                action.setEnabled(False)
+            self.act_publish.setToolTip(
+                "Публикация отключена: показан устаревший кэш. "
+                "Сначала получите свежий каталог с сервера."
+            )
+        elif self.profile.publish_enabled:
             self.act_publish.setToolTip("")
         else:
             self.act_publish.setToolTip(self.profile.publish_block_reason)
@@ -404,6 +587,13 @@ class MainWindow(QMainWindow):
         if profile.key == PROFILES[0].key:
             return self._initial_config_path
         return self.bridge_root / profile.config_rel
+
+    def _configured_source_file(self, config: LocalConfig | None = None) -> Path | None:
+        configured = (config or self.local_cfg).get_source_path().strip()
+        if not configured:
+            return None
+        path = Path(configured).expanduser()
+        return path if path.is_absolute() else self.bridge_root / path
 
     def _switch_profile(self, index: int) -> None:
         profile: Profile = self.profile_combo.itemData(index)
@@ -420,13 +610,49 @@ class MainWindow(QMainWindow):
                                  f"Не найден YAML профиля «{profile.label}»:\n{path}\n\n"
                                  "Обновите checkout avito-bridge (ветка с профилями).")
             return
-        self.save_local_selection()               # несохранённые галочки старого профиля — не терять
+        try:
+            # несохранённые галочки старого профиля — не терять
+            self.save_local_selection()
+        except Exception as exc:
+            self.profile_combo.setCurrentIndex(
+                next(i for i, p in enumerate(PROFILES) if p.key == self.profile.key)
+            )
+            QMessageBox.critical(
+                self,
+                "Профиль не переключён",
+                f"Не удалось сохранить выбор текущего профиля:\n{exc}",
+            )
+            return
         self.profile = profile
         self.config_path = path
         self.local_cfg = new_cfg
+        self._catalog_loaded = False
+        self._set_cache_mode(None)
         self.profile_combo.setCurrentIndex(index)  # при программном вызове комбо ещё не переставлен
         self._install_catalog_model([])
         self._set_busy(False)
+        if profile.key == "appliances":
+            portable_source = "runtime/appliances/current.xls"
+            runtime_price = (
+                self.bridge_root / "runtime" / "appliances" / "current.xls"
+            )
+            configured = new_cfg.get_source_path().replace("\\", "/")
+            if configured != portable_source or not runtime_price.is_file():
+                self._status(
+                    "Сначала нажмите «Импортировать XLS-прайс». "
+                    "Отсутствующий путь со старого компьютера не открывается автоматически.",
+                    10_000,
+                )
+                return
+        if profile.key == "carver":
+            source_file = self._configured_source_file(new_cfg)
+            if source_file is None or not source_file.is_file():
+                self._status(
+                    "Сначала откройте «Настроить публикацию» и выберите свежий "
+                    "XLSX-прайс CARVER. Поставщицкий файл не встроен в приложение.",
+                    10_000,
+                )
+                return
         self.refresh()
 
     def _status(self, message: str, timeout: int = 0, error: bool = False) -> None:
@@ -436,15 +662,69 @@ class MainWindow(QMainWindow):
         bar.style().polish(bar)
         bar.showMessage(message, timeout)
 
+    def _set_cache_mode(self, reason: str | None) -> None:
+        """Switch the visible catalog between fresh and read-only cached mode."""
+        normalized = " ".join(str(reason or "").split())[:400]
+        self._catalog_stale = bool(normalized)
+        self._catalog_stale_reason = normalized
+        if not hasattr(self, "cache_warning"):
+            return
+        if not self._catalog_stale:
+            self.cache_warning.clear()
+            self.cache_warning.setVisible(False)
+            return
+        self.cache_warning.setText(
+            "⚠ КЭШ — ДАННЫЕ НЕ АКТУАЛЬНЫ. Серверный каталог недоступен: "
+            f"{normalized}. Показан последний успешный снимок только для чтения; "
+            "редактирование и публикация отключены до свежего обновления."
+        )
+        self.cache_warning.setVisible(True)
+
     def refresh(self):
+        if self.profile.local_catalog:
+            source_file = self._configured_source_file()
+            if source_file is None or not source_file.is_file():
+                action = (
+                    "«Импортировать XLS-прайс»"
+                    if self.profile.key == "appliances"
+                    else "«Настроить публикацию»"
+                )
+                self._status(
+                    f"Локальный прайс не найден. Сначала выберите его через {action}.",
+                    10_000,
+                    error=True,
+                )
+                return
+        if self.model.dirty_keys:
+            try:
+                self.save_local_selection()
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Каталог не обновлён",
+                    f"Сначала не удалось сохранить выбор товаров:\n{exc}",
+                )
+                return
         self._set_busy(True)
         self._status("Обновление локального прайса…" if self.profile.local_catalog
                      else "Обновление каталога с сервера…")
-        worker = RefreshWorker(self.ssh, self.local_cfg, self.profile.config_rel,
-                               local_catalog=self.profile.local_catalog)
-        self._threads.append(run_in_thread(worker, self._on_refresh_ok, self._on_error))
+        worker = RefreshWorker(
+            self.ssh,
+            self.local_cfg,
+            self.profile.config_rel,
+            local_catalog=self.profile.local_catalog,
+            profile_key=self.profile.key,
+        )
+        self._start_worker(
+            worker,
+            self._on_refresh_ok,
+            self._on_error,
+            on_stale=self._on_refresh_stale,
+        )
 
     def _on_refresh_ok(self, rows):
+        self._set_cache_mode(None)
+        self._catalog_loaded = True
         self._install_catalog_model(rows)
         self._set_busy(False)
         published = sum(1 for r in rows if r.selected)
@@ -452,22 +732,59 @@ class MainWindow(QMainWindow):
         self._status(f"Серий: {len(rows)} · публикуется: {published}")
         self.refresh_done.emit()
 
+    def _on_refresh_stale(self, rows, reason: str):
+        reason = str(reason).strip() or "сервер недоступен без описания причины"
+        logger.warning(
+            "Using stale catalog cache for profile %s: %s",
+            self.profile.key,
+            reason,
+        )
+        self._set_cache_mode(reason)
+        # A cached snapshot is intentionally not a successful current-catalog
+        # verification and must never be persisted back as the active whitelist.
+        self._catalog_loaded = False
+        self._install_catalog_model(rows)
+        published = sum(1 for row in rows if row.selected)
+        self._update_dashboard(rows)
+        self._set_busy(False)
+        self._status(
+            f"КЭШ / НЕ АКТУАЛЬНО: {len(rows)} серий · выбрано {published}. "
+            "Публикация отключена до свежего обновления.",
+            error=True,
+        )
+        self.refresh_stale.emit(self._catalog_stale_reason)
+        self.refresh_done.emit()
+
     def _install_catalog_model(self, rows) -> None:
         per_item = self.profile.key != "conditioners"
-        self.model = CatalogTableModel(rows, per_item=per_item)
+        self.model = CatalogTableModel(
+            rows,
+            per_item=per_item,
+            read_only=self._catalog_stale,
+        )
         self.proxy.setSourceModel(self.model)
         self.table.setColumnHidden(CatalogTableModel.COL_SIZES, per_item)
 
     def save_local_selection(self):
-        for row in self.model.rows:
-            if row.key in self.model.dirty_keys:
-                self.local_cfg.set_selected(row.key, row.selected)
+        # Сохраняем ПОЛНЫЙ видимый whitelist. Поштучный set_selected не способен
+        # корректно выразить «все, кроме одного», когда исходное [] означает «все».
+        # До первого успешного refresh модель пуста, но это НЕ означает, что владелец
+        # выбрал «ничего»: нельзя затереть существующий whitelist простым запуском Studio.
+        if self._catalog_loaded:
+            self.local_cfg.replace_selected(
+                row.key for row in self.model.rows if row.selected
+            )
         self.local_cfg.save()
         self.model.dirty_keys.clear()
 
     def _publish_question(self) -> str:
         """Текст подтверждения: конкретная сводка изменений с прошлой публикации, если есть база."""
-        changes = publish_summary.summarize_changes(self.bridge_root, self.snapshot_dir)
+        changes = publish_summary.summarize_changes(
+            self.bridge_root,
+            self.snapshot_dir,
+            config_path=self.config_path,
+            profile_key=self.profile.key,
+        )
         if changes is None:   # первая публикация из студии — базы для сравнения ещё нет
             return ("Локальные изменения (публикация серий, цены, фото, описания) уйдут на сервер "
                     "и попадут в реальный фид Avito. Продолжить?")
@@ -482,8 +799,17 @@ class MainWindow(QMainWindow):
         return f"На сервер и в реальный фид Avito уйдут изменения:\n\n{lines}\n\nПродолжить?"
 
     def publish(self):
+        if self._catalog_stale:
+            QMessageBox.warning(
+                self,
+                "Публикация заблокирована",
+                "Сейчас показан устаревший кэш каталога. Он доступен только для "
+                "просмотра и не считается свежей проверкой. Восстановите соединение "
+                "с сервером и нажмите «Обновить каталог».",
+            )
+            return
         if not self.profile.publish_enabled:
-            QMessageBox.warning(self, "Публикация CARVER заблокирована",
+            QMessageBox.warning(self, "Публикация недоступна",
                                 self.profile.publish_block_reason)
             return
         # галочки «Публикуется» сохраняем локально ДО сводки — иначе их не будет в списке;
@@ -508,18 +834,36 @@ class MainWindow(QMainWindow):
         worker = DeployWorker(
             self.bridge_root, self.ssh, config_path=self.config_path,
             local_feed=self.profile.local_catalog)
-        self._threads.append(run_in_thread(worker, self._on_publish_ok, self._on_publish_error))
+        self._start_worker(worker, self._on_publish_ok, self._on_publish_error)
 
     def _on_publish_ok(self, output: str):
         self._set_busy(False)
         try:
-            publish_summary.save_snapshot(self.bridge_root, self.snapshot_dir)
-        except Exception:
-            pass   # сбой снапшота не должен маскировать УСПЕШНУЮ публикацию (сводка просто будет общей)
-        self._status("Опубликовано. Сервер пересобирает фид.", 8000)
+            publish_summary.save_snapshot(
+                self.bridge_root,
+                self.snapshot_dir,
+                config_path=self.config_path,
+                profile_key=self.profile.key,
+            )
+        except Exception as exc:
+            # Publication has already committed remotely, so snapshot failure
+            # cannot turn it into a false deployment failure.  It must still be
+            # visible in diagnostics for recovery and support.
+            logger.warning(
+                "Published profile %s, but could not save local snapshot: %s",
+                self.profile.key,
+                exc,
+            )
+        summary = " ".join(str(output).split())
+        self._status(
+            "Опубликовано и проверено."
+            + (f" {summary[:220]}" if summary else ""),
+            10_000,
+        )
         self.deploy_done.emit()
 
     def _on_publish_error(self, message: str):
+        logger.error("Publication failed for profile %s: %s", self.profile.key, message)
         self._set_busy(False)
         self._status(f"Ошибка публикации: {message}", error=True)
         # модально: провал публикации нельзя показывать только строкой статуса —
@@ -529,14 +873,30 @@ class MainWindow(QMainWindow):
         self.publish_failed.emit(message)
 
     def _on_error(self, message: str):
+        logger.error("Background operation failed for profile %s: %s", self.profile.key, message)
         self._set_busy(False)
         self._status(f"Ошибка: {message}", error=True)
 
     def _open_edit_dialog(self, proxy_index) -> None:
+        if self._catalog_stale:
+            QMessageBox.information(
+                self,
+                "Каталог открыт только для чтения",
+                "Показан устаревший кэш. Для редактирования сначала восстановите "
+                "соединение и получите свежий каталог.",
+            )
+            return
         from avito_studio.edit_dialog import EditSeriesDialog
         source_index = self.proxy.mapToSource(proxy_index)
         row = self.model.rows[source_index.row()]
-        dlg = EditSeriesDialog(row, self.bridge_root, self.local_cfg, self.ssh, parent=self)
+        dlg = EditSeriesDialog(
+            row,
+            self.bridge_root,
+            self.local_cfg,
+            self.ssh,
+            profile=self.profile,
+            parent=self,
+        )
         if not dlg.exec():
             return
         try:
@@ -615,7 +975,10 @@ class MainWindow(QMainWindow):
         """Open the one-time profile setup without publishing anything externally."""
         if self.profile.key != "carver":
             return
-        from avito_studio.carver_publish_settings_dialog import CarverPublishSettingsDialog
+        from avito_studio.carver_publish_settings_dialog import (
+            CarverPublishSettingsDialog,
+        )
+
         dlg = CarverPublishSettingsDialog(self.local_cfg, parent=self)
         if not dlg.exec():
             return
@@ -632,6 +995,72 @@ class MainWindow(QMainWindow):
             "Дальше: обновите каталог, отметьте позиции, загрузите фото из прайса и публикуйте фид.",
         )
 
+    def _show_about(self) -> None:
+        from avito_studio.diagnostics import default_log_dir
+
+        revision = bridge_revision()
+        short_revision = revision[:12] if revision != "development" else revision
+        QMessageBox.about(
+            self,
+            "О программе",
+            f"Avito Content Studio {__version__}\n"
+            f"Совместимый Avito Bridge: {short_revision}\n\n"
+            f"Диагностический журнал:\n{default_log_dir() / 'studio.log'}",
+        )
+
+    def _open_appliances_price_import(self) -> None:
+        """Choose and install a local supplier XLS without any external action."""
+        if self.profile.key != "appliances":
+            return
+        from avito_studio.ui_components import get_open_file_name
+
+        runtime_dir = self.bridge_root / "runtime" / "appliances"
+        initial_dir = str(runtime_dir) if runtime_dir.is_dir() else ""
+        source, _ = get_open_file_name(
+            self,
+            "Выберите XLS-прайс бытовой техники",
+            initial_dir,
+            "Прайс Excel 97–2003 (*.xls)",
+        )
+        if not source:
+            return
+        self._set_busy(True)
+        self._status("Проверяю и безопасно импортирую XLS-прайс…")
+        worker = AppliancesPriceImportWorker(
+            Path(source), self.bridge_root, self.local_cfg
+        )
+        self._start_worker(
+            worker,
+            self._on_appliances_price_import_ok,
+            self._on_appliances_price_import_error,
+        )
+
+    def _on_appliances_price_import_ok(self, target: str, count: int) -> None:
+        self._set_busy(False)
+        self._catalog_loaded = False
+        self._status(
+            f"XLS-прайс сохранён локально: {count} позиций. "
+            "Нажмите «Обновить каталог».",
+            9000,
+        )
+        self.appliances_price_import_done.emit(target, count)
+        QMessageBox.information(
+            self,
+            "Прайс импортирован",
+            f"Проверено и сохранено позиций: {count}.\n"
+            "Профиль переведён на переносимый локальный файл.\n\n"
+            "На сервер и Avito ничего не отправлено. "
+            "Нажмите «Обновить каталог», чтобы увидеть новый прайс.",
+        )
+
+    def _on_appliances_price_import_error(self, message: str) -> None:
+        self._on_error(message)
+        QMessageBox.critical(
+            self,
+            "Прайс не импортирован",
+            f"{message}\n\nСтарый локальный прайс и настройки сохранены.",
+        )
+
     def _import_content_cards(self) -> None:
         """Точные карточки МБТ/КБТ → ручные фото профиля; внешней публикации здесь нет."""
         if self.profile.key == "carver":
@@ -646,21 +1075,28 @@ class MainWindow(QMainWindow):
             self._status("Извлекаю и загружаю фото CARVER…")
             worker = CarverPhotoImportWorker(
                 self.ssh, self.config_path, list(self.model.rows), self.local_cfg)
-            self._threads.append(run_in_thread(
-                worker, self._on_carver_photo_import_ok, self._on_error))
+            self._start_worker(worker, self._on_carver_photo_import_ok, self._on_error)
             return
         if self.profile.key != "appliances":
             return
-        from avito_studio.content_card_import import import_content_cards
-        try:
-            found, added, removed = import_content_cards(
-                self.ssh, list(self.model.rows), self.local_cfg)
-        except Exception as exc:
-            QMessageBox.critical(self, "Импорт фото не удался", str(exc))
-            return
-        top_left = self.model.index(0, 0)
-        bottom_right = self.model.index(self.model.rowCount() - 1, self.model.columnCount() - 1)
+        self._set_busy(True)
+        self._status("Ищу и импортирую карточки Контент-завода…")
+        worker = ContentCardImportWorker(
+            self.ssh, list(self.model.rows), self.local_cfg
+        )
+        self._start_worker(
+            worker, self._on_content_card_import_ok, self._on_content_card_import_error
+        )
+
+    def _on_content_card_import_ok(
+        self, found: int, added: int, removed: int
+    ) -> None:
+        self._set_busy(False)
         if self.model.rowCount():
+            top_left = self.model.index(0, 0)
+            bottom_right = self.model.index(
+                self.model.rowCount() - 1, self.model.columnCount() - 1
+            )
             self.model.dataChanged.emit(top_left, bottom_right)
         self._status(
             f"Карточки Контент-завода: найдено {found}, добавлено {added}, убрано дублей {removed}",
@@ -670,6 +1106,10 @@ class MainWindow(QMainWindow):
             f"Точных уникальных совпадений: {found}.\nНовых фото добавлено: {added}.\n"
             f"Повторных карточек отключено: {removed}.\n\n"
             "Позиции с фото включены локально. На Avito ничего ещё не отправлено.")
+
+    def _on_content_card_import_error(self, message: str) -> None:
+        self._on_error(message)
+        QMessageBox.critical(self, "Импорт фото не удался", message)
 
     def _on_carver_photo_import_ok(self, found: int, added: int, preserved: int) -> None:
         self._set_busy(False)
@@ -688,8 +1128,10 @@ class MainWindow(QMainWindow):
     def _refresh_avito_status(self) -> None:
         self._set_busy(True)
         self._status("Запрашиваю статус на Avito…")
-        worker = AvitoStatusWorker(self.bridge_root, list(self.model.rows))
-        self._threads.append(run_in_thread(worker, self._on_avito_status_ok, self._on_error))
+        worker = AvitoStatusWorker(
+            self.bridge_root, list(self.model.rows), self.profile.key
+        )
+        self._start_worker(worker, self._on_avito_status_ok, self._on_error)
 
     def _on_avito_status_ok(self, statuses: dict) -> None:
         self._set_busy(False)

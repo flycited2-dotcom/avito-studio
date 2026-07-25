@@ -6,12 +6,32 @@ from pathlib import Path
 import yaml
 
 from avito_bridge.config import load_config
+from avito_studio.carver_price_file import (
+    resolve_carver_price_path,
+    validate_carver_price_metadata,
+)
 
 
 def carver_publish_issues(config_path: Path, rows) -> list[str]:
     """Return user-facing blockers that would make a CARVER feed unsafe to publish."""
-    cfg = load_config(Path(config_path))
+    config_path = Path(config_path)
+    cfg = load_config(config_path)
     issues: list[str] = []
+
+    configured_price = (cfg.source_options or {}).get("path", "")
+    if not configured_price:
+        issues.append(
+            "Установите свежий XLSX-прайс CARVER через «Настроить публикацию»."
+        )
+    else:
+        price_path = resolve_carver_price_path(config_path, configured_price)
+        try:
+            validate_carver_price_metadata(price_path)
+        except (OSError, ValueError) as exc:
+            issues.append(
+                "Прайс CARVER нельзя публиковать. "
+                f"{exc} Выберите свежий файл через «Настроить публикацию»."
+            )
 
     selected_rows = [row for row in rows if row.selected]
     if not rows:

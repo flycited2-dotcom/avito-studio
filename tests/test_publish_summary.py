@@ -1,4 +1,8 @@
 import json
+
+import pytest
+
+import avito_studio.publish_summary as publish_summary
 from avito_studio.publish_summary import save_snapshot, summarize_changes
 
 CFG_V1 = """\
@@ -83,3 +87,91 @@ def test_snapshot_after_publish_resets_baseline(tmp_path):
     (root / "config" / "config.yaml").write_text(CFG_V2, encoding="utf-8")
     save_snapshot(root, tmp_path / "snap")   # «опубликовали» V2
     assert summarize_changes(root, tmp_path / "snap") == []
+
+
+def test_profile_snapshots_are_isolated_and_use_selected_yaml(tmp_path):
+    root = _bridge(tmp_path, CFG_V1)
+    (root / "profiles").mkdir()
+    wreaths = root / "profiles" / "wreaths.yaml"
+    wreaths.write_text(
+        "profile: {name: wreaths}\n"
+        "catalog: {selected_series: [wreath-a]}\n",
+        encoding="utf-8",
+    )
+    save_snapshot(
+        root, tmp_path / "snap", config_path=wreaths, profile_key="wreaths"
+    )
+    wreaths.write_text(
+        "profile: {name: wreaths}\n"
+        "catalog: {selected_series: [wreath-b]}\n",
+        encoding="utf-8",
+    )
+
+    lines = summarize_changes(
+        root, tmp_path / "snap", config_path=wreaths, profile_key="wreaths"
+    )
+
+    assert "включена публикация: wreath-b" in lines
+    assert "выключена публикация: wreath-a" in lines
+    assert summarize_changes(
+        root,
+        tmp_path / "snap",
+        config_path=root / "config" / "config.yaml",
+        profile_key="conditioners",
+    ) is None
+
+
+def test_summary_detects_changed_local_source_file(tmp_path):
+    root = _bridge(tmp_path, CFG_V1)
+    price = root / "data" / "price.xlsx"
+    price.parent.mkdir()
+    price.write_bytes(b"v1")
+    profile = root / "profiles" / "carver.yaml"
+    profile.parent.mkdir()
+    profile.write_text(
+        "profile:\n"
+        "  name: carver\n"
+        "  source_options: {path: data/price.xlsx}\n"
+        "catalog: {}\n",
+        encoding="utf-8",
+    )
+    save_snapshot(root, tmp_path / "snap", profile, "carver")
+    price.write_bytes(b"v2")
+
+    lines = summarize_changes(root, tmp_path / "snap", profile, "carver")
+
+    assert "изменён файл-источник товаров/цен" in lines
+
+
+def test_snapshot_keeps_only_backup_when_promotion_and_restore_both_fail(
+    tmp_path, monkeypatch
+):
+    root = _bridge(tmp_path, CFG_V1)
+    snapshot = tmp_path / "snap"
+    save_snapshot(root, snapshot)
+    (root / "config" / "config.yaml").write_text(CFG_V2, encoding="utf-8")
+    real_replace = publish_summary.os.replace
+    replace_calls = 0
+
+    def fail_promotion_and_restore(source, destination):
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            return real_replace(source, destination)
+        if replace_calls == 2:
+            raise OSError("promotion failed")
+        raise OSError("restore failed")
+
+    monkeypatch.setattr(
+        publish_summary.os, "replace", fail_promotion_and_restore
+    )
+
+    with pytest.raises(RuntimeError, match="Резервная копия сохранена"):
+        save_snapshot(root, snapshot)
+
+    backups = list(tmp_path.glob(".snap.*.backup"))
+    assert len(backups) == 1
+    assert (
+        backups[0] / "config" / "config.yaml"
+    ).read_text(encoding="utf-8") == CFG_V1
+    assert not snapshot.exists()

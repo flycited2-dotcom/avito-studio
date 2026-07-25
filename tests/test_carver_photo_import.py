@@ -70,3 +70,39 @@ def test_import_preserves_owner_photo(tmp_path, monkeypatch):
     assert LocalConfig(cfg.path).get_manual_photo("PPG-1900IS") == \
         "https://example.test/owner.jpg"
     assert row.has_card is True
+
+
+def test_relative_price_path_is_resolved_from_bridge_root_not_cwd(
+    tmp_path, monkeypatch
+):
+    bridge_root = tmp_path / "bridge"
+    price = bridge_root / "runtime" / "carver" / "current.xlsx"
+    price.parent.mkdir(parents=True)
+    price.write_bytes(b"not-read-directly")
+    config_path = bridge_root / "profiles" / "carver.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        "profile:\n"
+        "  name: carver\n"
+        "  source: carver_xlsx\n"
+        "  source_options: {path: runtime/carver/current.xlsx}\n"
+        "catalog:\n"
+        "  manual_photos: {}\n"
+        "  selected_series: [\"__none__\"]\n",
+        encoding="utf-8",
+    )
+    local_cfg = LocalConfig(config_path)
+    observed = []
+    monkeypatch.setattr(
+        importer,
+        "extract_embedded_photos",
+        lambda path: observed.append(Path(path)) or {},
+    )
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    assert importer.import_carver_photos(
+        FakeSsh(), config_path, [_row()], local_cfg
+    ) == (0, 0, 0)
+    assert observed == [price.resolve()]

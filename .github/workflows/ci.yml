@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   windows:
-    name: Tests and Windows build
+    name: Paired tests and Windows build
     runs-on: windows-latest
 
     steps:
@@ -24,11 +24,14 @@ jobs:
         with:
           path: avito-studio
 
-      - name: Read compatible Bridge revision
+      - name: Validate compatible Bridge revision
         id: bridge
         shell: pwsh
         run: |
           $revision = (Get-Content avito-studio/bridge.lock -Raw).Trim()
+          if ($revision -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw "bridge.lock must contain exactly one lowercase 40-character Git commit hash"
+          }
           "revision=$revision" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Check out Bridge
@@ -41,7 +44,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: |
             avito-studio/pyproject.toml
@@ -52,15 +55,93 @@ jobs:
           python -m pip install -e "./avito-bridge[dev]"
           python -m pip install -e "./avito-studio[dev]"
 
-      - name: Run paired test suite
+      - name: Compile both repositories
+        run: >
+          python -m compileall -q
+          avito-bridge/src avito-bridge/tests avito-bridge/scripts
+          avito-studio/src avito-studio/tests
+
+      - name: Check fatal lint errors in both repositories
+        run: >
+          python -m ruff check
+          avito-bridge/src avito-bridge/tests avito-bridge/scripts
+          avito-studio/src avito-studio/tests
+          --select E9,F
+
+      - name: Run Bridge tests explicitly
+        working-directory: avito-bridge
+        run: python -m pytest -q --disable-socket
+
+      - name: Run Studio tests with branch coverage
         working-directory: avito-studio
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: python -m coverage run -m pytest -q --disable-socket
+
+      - name: Enforce Studio source coverage
+        working-directory: avito-studio
+        run: python -m coverage report --fail-under=86
 
       - name: Build Windows executable
         working-directory: avito-studio
         run: python -m PyInstaller --noconfirm --clean avito_studio.spec
+
+      - name: Smoke-test packaged application and bundled workspace
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $settingsCommand = "from PySide6.QtCore import QSettings; print(QSettings('AvitoStudio','AvitoContentStudio').value('bridge_root','<unset>'))"
+          $settingsBefore = (python -c $settingsCommand | Out-String).Trim()
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "avito-studio-smoke-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+          $env:LOCALAPPDATA = $smokeRoot
+          Remove-Item Env:AVITO_STUDIO_BRIDGE_ROOT -ErrorAction SilentlyContinue
+          $executable = Resolve-Path "avito-studio/dist/AvitoContentStudio.exe"
+          $process = Start-Process -FilePath $executable -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged smoke test failed with exit code $($process.ExitCode)"
+          }
+          $version = (Get-Item -LiteralPath $executable).VersionInfo.FileVersion
+          if ($version -ne "0.3.0.0") {
+            throw "Packaged executable has unexpected file version: $version"
+          }
+          $required = @(
+            "AvitoStudio/bridge/config/config.yaml",
+            "AvitoStudio/bridge/profiles/wreaths.yaml",
+            "AvitoStudio/bridge/profiles/carver.yaml",
+            "AvitoStudio/bridge/profiles/appliances.yaml",
+            "AvitoStudio/logs/studio.log"
+          )
+          foreach ($relative in $required) {
+            $path = Join-Path $smokeRoot $relative
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Packaged smoke test did not create required file: $path"
+            }
+          }
+          $log = Join-Path $smokeRoot "AvitoStudio/logs/studio.log"
+          if ((Get-Item -LiteralPath $log).Length -eq 0) {
+            throw "Packaged smoke test created an empty diagnostics log"
+          }
+          if (-not (Select-String -LiteralPath $log -SimpleMatch "Studio smoke checks passed" -Quiet)) {
+            throw "Packaged smoke test did not complete its UI self-check"
+          }
+
+          $explicitRoot = Join-Path $env:RUNNER_TEMP "avito-studio-explicit-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Path $explicitRoot -Force | Out-Null
+          $env:LOCALAPPDATA = $explicitRoot
+          $env:AVITO_STUDIO_BRIDGE_ROOT = Join-Path $smokeRoot "AvitoStudio/bridge"
+          $explicitProcess = Start-Process -FilePath $executable -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($explicitProcess.ExitCode -ne 0) {
+            throw "Explicit-root smoke test failed with exit code $($explicitProcess.ExitCode)"
+          }
+          if (Test-Path -LiteralPath (Join-Path $explicitRoot "AvitoStudio/bridge")) {
+            throw "Explicit-root smoke test unexpectedly installed a bundled workspace"
+          }
+          $settingsAfter = (python -c $settingsCommand | Out-String).Trim()
+          if ($settingsAfter -cne $settingsBefore) {
+            throw "Smoke tests changed the user's persisted bridge_root setting"
+          }
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

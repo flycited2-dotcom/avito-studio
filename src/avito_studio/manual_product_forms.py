@@ -218,8 +218,6 @@ def serialize_manual_product(
             if "инвертор" not in series.casefold() and "inverter" not in series.casefold():
                 result["series"] = series + " Inverter"
             tech["Тип компрессора"] = "Инвертор"
-        if description:
-            tech["Особенности"] = description
         return result
 
     if profile_key == "carver":

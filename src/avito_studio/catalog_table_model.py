@@ -3,38 +3,50 @@
 в config.yaml происходит через LocalConfig при нажатии «Сохранить»/«Опубликовать» в главном окне.
 
 Qt.UserRole отдаёт СОРТИРОВОЧНЫЕ значения (число для цены/остатка, а не строку "25990 ₽") —
-прокси в главном окне сортирует по нему (setSortRole), иначе "9990 ₽" встаёт выше "25990 ₽"."""
+ прокси в главном окне сортирует по нему (setSortRole), иначе "9990 ₽" встаёт выше "25990 ₽"."""
 from __future__ import annotations
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
 from avito_studio.catalog_service import CatalogRow, leading_price
-from avito_studio.theme import GREEN, RED, MUTED
+from avito_studio.theme import GREEN, MUTED, RED
 
 _CONDITIONER_HEADERS = ["Бренд", "Серия", "Типоразмеры", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
 _PER_ITEM_HEADERS = ["Бренд", "Товар", "Характеристики", "Цена", "Остаток", "Карточка", "Публикуется", "Статус Avito"]
 
 # значения avito_status из /autoload/v4/uploads/last_successful/items
 _STATUS_BAD = {"blocked", "rejected", "removed", "archived"}
+_ROOT_INDEX = QModelIndex()
 
 
-def _sort_price(price_range: str) -> int:
+def _sort_price(price_range: str) -> float:
     p = leading_price(price_range)
-    return p if p is not None else -1   # «—» уходит в конец при сортировке по возрастанию
+    # Return one QVariant type for both branches: mixing Qt int and qlonglong
+    # makes QSortFilterProxyModel compare by variant type before numeric value.
+    return float(p) if p is not None else float("inf")
 
 
 class CatalogTableModel(QAbstractTableModel):
     (COL_BRAND, COL_SERIES, COL_SIZES, COL_PRICE, COL_STOCK, COL_CARD,
      COL_SELECTED, COL_AVITO_STATUS) = range(8)
 
-    def __init__(self, rows: list[CatalogRow], parent=None, per_item: bool = False):
+    def __init__(
+        self,
+        rows: list[CatalogRow],
+        parent=None,
+        per_item: bool = False,
+        read_only: bool = False,
+    ):
         super().__init__(parent)
         self.rows = rows
         self.headers = _PER_ITEM_HEADERS if per_item else _CONDITIONER_HEADERS
+        self.read_only = read_only
         self.dirty_keys: set[str] = set()
 
-    def rowCount(self, parent=QModelIndex()) -> int:
+    def rowCount(self, parent=_ROOT_INDEX) -> int:
         return 0 if parent.isValid() else len(self.rows)
 
-    def columnCount(self, parent=QModelIndex()) -> int:
+    def columnCount(self, parent=_ROOT_INDEX) -> int:
         return 0 if parent.isValid() else len(self.headers)
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -44,7 +56,7 @@ class CatalogTableModel(QAbstractTableModel):
 
     def flags(self, index):
         base = super().flags(index)
-        if index.column() == self.COL_SELECTED:
+        if index.column() == self.COL_SELECTED and not self.read_only:
             return base | Qt.ItemIsUserCheckable
         return base
 
@@ -100,7 +112,11 @@ class CatalogTableModel(QAbstractTableModel):
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
-        if index.column() == self.COL_SELECTED and role == Qt.CheckStateRole:
+        if (
+            not self.read_only
+            and index.column() == self.COL_SELECTED
+            and role == Qt.CheckStateRole
+        ):
             row = self.rows[index.row()]
             # клик мышью приходит от делегата как ГОЛЫЙ int (2), из теста — как enum;
             # Qt.CheckState — чистый Python-enum (2 == Qt.Checked даёт False), нормализуем

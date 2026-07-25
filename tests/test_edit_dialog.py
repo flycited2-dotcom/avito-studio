@@ -1,8 +1,12 @@
+from types import SimpleNamespace
+
+import pytest
 from PIL import Image
-from avito_studio.catalog_service import CatalogRow
-from avito_studio.local_config import LocalConfig
-from avito_studio.edit_dialog import EditSeriesDialog
+
 from avito_studio import description_store
+from avito_studio.catalog_service import CatalogMember, CatalogRow
+from avito_studio.edit_dialog import EditSeriesDialog
+from avito_studio.local_config import LocalConfig
 
 FIXTURE_CFG = """\
 catalog:
@@ -37,11 +41,62 @@ class FakeSsh:
 
 
 def _row(**overrides):
-    base = dict(key="breeze|funai|sensei 2.0", source="breeze", brand="Funai", series="Sensei 2.0",
-               sizes="7/9 тыс. BTU", stock_total=5, has_card=True, forced=False, selected=True,
-               representative_nc="НС-2", price_range="25990 ₽")
+    base = {
+        "key": "breeze|funai|sensei 2.0",
+        "source": "breeze",
+        "brand": "Funai",
+        "series": "Sensei 2.0",
+        "sizes": "7/9 тыс. BTU",
+        "stock_total": 5,
+        "has_card": True,
+        "forced": False,
+        "selected": True,
+        "representative_nc": "НС-2",
+        "price_range": "25990 ₽",
+    }
     base.update(overrides)
     return CatalogRow(**base)
+
+
+def _manual_row(manual_id="manual-test", **overrides):
+    member = CatalogMember(
+        nc_code=manual_id,
+        current_price=15990,
+        cost=None,
+        price_ok=True,
+        # Reproduce the historical export which marked manual products forced.
+        forced=True,
+        supplier_sku=f"manual:{manual_id}",
+        product_kind="manual",
+    )
+    base = {
+        "key": f"manual|brand|{manual_id}",
+        "source": "manual",
+        "brand": "Brand",
+        "series": "Manual Series",
+        "forced": True,
+        "representative_nc": manual_id,
+        "price_range": "15990 ₽",
+        "members": (member,),
+    }
+    base.update(overrides)
+    return _row(**base)
+
+
+def _add_manual_product(local_cfg, manual_id="manual-test"):
+    local_cfg.add_manual_product(
+        manual_id,
+        {
+            "brand": "Brand",
+            "title": "Manual Product",
+            "series": "Manual Series",
+            "price": 15990,
+            "stock": 1,
+            "photos": ["https://example.test/old.jpg"],
+            "description": "Старое описание",
+        },
+    )
+    local_cfg.save()
 
 
 def test_forced_row_price_field_editable_and_saved(qtbot, tmp_path):
@@ -184,6 +239,157 @@ def test_save_writes_description(qtbot, tmp_path):
     assert description_store.get_description(root, row.key) == "Новое описание серии"
 
 
+def test_fully_manual_product_uses_own_price_photo_and_description_roundtrip(
+    qtbot, tmp_path
+):
+    """The old forced branch raised KeyError for this valid manual product."""
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    _add_manual_product(LocalConfig(config_path))
+    row = _manual_row()
+
+    dlg = EditSeriesDialog(row, root, LocalConfig(config_path), FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.price_field.value() == 15990
+    assert dlg.reset_price_btn is None
+    assert dlg.photo_label.text() == "https://example.test/old.jpg"
+    assert dlg.description_edit.toPlainText() == "Старое описание"
+
+    dlg.price_field.setValue(17490)
+    dlg.description_edit.setPlainText("Новое описание ручного товара")
+    dlg.save()
+
+    reloaded = LocalConfig(config_path)
+    product = reloaded.get_manual_product("manual-test")
+    assert product["price"] == 17490
+    assert list(product["photos"]) == ["https://example.test/old.jpg"]
+    assert product["description"] == "Новое описание ручного товара"
+    assert reloaded.get_manual_price("manual-test") is None
+    assert reloaded.get_manual_photo("manual-test") is None
+
+    # A genuine second load proves the values are persisted, not merely held
+    # in the first dialog's in-memory ruamel object.
+    reopened = EditSeriesDialog(row, root, LocalConfig(config_path), FakeSsh())
+    qtbot.addWidget(reopened)
+    assert reopened.price_field.value() == 17490
+    assert reopened.photo_label.text() == "https://example.test/old.jpg"
+    assert reopened.description_edit.toPlainText() == "Новое описание ручного товара"
+
+
+def test_non_conditioner_manual_product_hides_card_generation_and_utp(qtbot, tmp_path):
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    _add_manual_product(LocalConfig(config_path))
+    dlg = EditSeriesDialog(
+        _manual_row(),
+        root,
+        LocalConfig(config_path),
+        FakeSsh(),
+        profile=SimpleNamespace(key="carver"),
+    )
+    qtbot.addWidget(dlg)
+
+    assert dlg.generate_card_btn.isHidden()
+    assert dlg.generate_card_btn.isEnabled() is False
+    assert dlg.utp_edit.isHidden()
+
+
+def test_fully_manual_photo_replaces_product_photos_not_manual_photos(
+    qtbot, tmp_path, monkeypatch
+):
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    _add_manual_product(LocalConfig(config_path))
+    row = _manual_row(forced=False)
+    photo = tmp_path / "replacement.png"
+    Image.new("RGB", (4, 4), color="green").save(photo)
+    monkeypatch.setattr(
+        "avito_studio.workers.upload_photo_blocking",
+        lambda *_args, **_kwargs: "https://example.test/replacement.jpg",
+    )
+
+    dlg = EditSeriesDialog(row, root, LocalConfig(config_path), FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg._new_photo_path = photo
+    dlg.save()
+
+    reloaded = LocalConfig(config_path)
+    assert reloaded.get_manual_product_photos("manual-test") == [
+        "https://example.test/replacement.jpg"
+    ]
+    assert reloaded.get_manual_photo("manual-test") is None
+
+
+def test_fully_manual_legacy_manifest_description_is_migrated_to_product(
+    qtbot, tmp_path
+):
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    _add_manual_product(LocalConfig(config_path))
+    row = _manual_row()
+    description_store.save_description(root, row.key, "Текст из старой Studio")
+
+    dlg = EditSeriesDialog(row, root, LocalConfig(config_path), FakeSsh())
+    qtbot.addWidget(dlg)
+    assert dlg.description_edit.toPlainText() == "Текст из старой Studio"
+    dlg.save()
+
+    assert (
+        LocalConfig(config_path).get_manual_product_description("manual-test")
+        == "Текст из старой Studio"
+    )
+    assert description_store.get_description(root, row.key) == ""
+
+
+def test_fully_manual_manifest_cleanup_failure_rolls_back_product_config(
+    qtbot, tmp_path, monkeypatch
+):
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    _add_manual_product(LocalConfig(config_path))
+    row = _manual_row()
+    description_store.save_description(root, row.key, "Текст из старой Studio")
+    before = config_path.read_text(encoding="utf-8")
+    local_cfg = LocalConfig(config_path)
+    dlg = EditSeriesDialog(row, root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.price_field.setValue(18000)
+
+    def fail_delete(*_args, **_kwargs):
+        raise OSError("manifest locked")
+
+    monkeypatch.setattr(description_store, "delete_description", fail_delete)
+    with pytest.raises(OSError, match="manifest locked"):
+        dlg.save()
+
+    assert config_path.read_text(encoding="utf-8") == before
+    assert local_cfg.get_manual_product_price("manual-test") == 15990
+    assert description_store.get_description(root, row.key) == "Текст из старой Studio"
+
+
+def test_description_failure_rolls_back_price_config_transaction(
+    qtbot, tmp_path, monkeypatch
+):
+    root = _bridge_root(tmp_path)
+    config_path = root / "config" / "config.yaml"
+    before = config_path.read_text(encoding="utf-8")
+    local_cfg = LocalConfig(config_path)
+    dlg = EditSeriesDialog(_row(), root, local_cfg, FakeSsh())
+    qtbot.addWidget(dlg)
+    dlg.price_field.setValue(21990)
+    dlg.description_edit.setPlainText("Не должно сохраниться")
+
+    def fail_description(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(description_store, "save_description", fail_description)
+    with pytest.raises(OSError, match="disk full"):
+        dlg.save()
+
+    assert config_path.read_text(encoding="utf-8") == before
+    assert local_cfg.get_manual_price("НС-2") is None
+
+
 def test_save_without_touching_empty_description_does_not_create_manifest_entry(qtbot, tmp_path):
     """Раньше save() ВСЕГДА писал содержимое поля описания — открыл карточку (посмотреть фото,
     сгенерить карточку) и нажал «Сохранить», ничего не тронув → создавался пустой файл-заглушка
@@ -212,7 +418,11 @@ def test_save_uploads_new_photo_and_stores_url(qtbot, tmp_path):
     dlg.save()
     assert len(ssh.put_calls) == 1
     reloaded = LocalConfig(root / "config" / "config.yaml")
-    assert reloaded.get_manual_photo("НС-2") == "https://splithome.ru/static/manual-photos/НС-2.jpg"
+    saved_url = reloaded.get_manual_photo("НС-2")
+    assert saved_url.startswith(
+        "https://splithome.ru/static/manual-photos/НС-2-"
+    )
+    assert saved_url.endswith(".jpg")
 
 
 def test_manual_photo_enables_row_in_safe_empty_profile(qtbot, tmp_path, monkeypatch):
