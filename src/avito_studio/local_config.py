@@ -38,6 +38,9 @@ class LocalConfig:
         entry = self.data.get("catalog", {}).get("force_include", {}).get(nc_code)
         return entry.get("price") if isinstance(entry, dict) else None
 
+    def has_force_include(self, nc_code: str) -> bool:
+        return nc_code in (self.data.get("catalog", {}).get("force_include", {}) or {})
+
     def set_force_price(self, nc_code: str, price: int) -> None:
         self.data["catalog"]["force_include"][nc_code]["price"] = price
 

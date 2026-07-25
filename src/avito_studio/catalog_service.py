@@ -15,6 +15,15 @@ def export_cmd(config_rel: str = "config/config.yaml") -> str:
     return f"{REMOTE_EXPORT_CMD} --config {config_rel}"
 
 
+@dataclass(frozen=True)
+class CatalogMember:
+    nc_code: str
+    current_price: int | None
+    cost: int | None
+    price_ok: bool
+    forced: bool
+
+
 @dataclass
 class CatalogRow:
     key: str
@@ -29,6 +38,7 @@ class CatalogRow:
     representative_nc: str = ""
     price_range: str = "—"
     avito_status: str | None = None
+    members: tuple[CatalogMember, ...] = ()
 
 
 def leading_price(price_range: str) -> int | None:
@@ -72,7 +82,14 @@ def _rows_from_data(data: dict, local_cfg: LocalConfig) -> list[CatalogRow]:
             selected=local_cfg.is_selected(g["key"]),
             # аномальная серия без членов не должна ронять всё «Обновить» целиком
             representative_nc=g["members"][0]["nc_code"] if g["members"] else "",
-            price_range=_price_range_label(g["members"])))
+            price_range=_price_range_label(g["members"]),
+            members=tuple(CatalogMember(
+                nc_code=str(member.get("nc_code", "")),
+                current_price=member.get("price"),
+                cost=member.get("cost"),
+                price_ok=bool(member.get("price_ok")),
+                forced=bool(member.get("forced")),
+            ) for member in g["members"])))
     return rows
 
 
